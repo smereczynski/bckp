@@ -50,33 +50,7 @@ enum IconFactory {
         arrowPath.close()
         arrowPath.fill()
 
-        // Subtle cloud behind text (semi-transparent white)
-        let cloudAlpha: CGFloat = 0.12
-        let cloudColor = NSColor.white.withAlphaComponent(cloudAlpha)
-        cloudColor.setFill()
-        let cloudCenter = CGPoint(x: center.x, y: center.y + size * 0.10)
-        let cloud = NSBezierPath()
-        let r1 = size * 0.10, r2 = size * 0.12, r3 = size * 0.09
-        cloud.appendOval(in: NSRect(x: cloudCenter.x - r1 - r2 * 0.6, y: cloudCenter.y - r1 * 0.5, width: r1 * 2, height: r1 * 2))
-        cloud.appendOval(in: NSRect(x: cloudCenter.x - r2 * 0.6, y: cloudCenter.y - r2 * 0.4, width: r2 * 2, height: r2 * 2))
-        cloud.appendOval(in: NSRect(x: cloudCenter.x + r2 * 0.6 - r3, y: cloudCenter.y - r3 * 0.4, width: r3 * 2, height: r3 * 2))
-        cloud.fill()
-
-        // Title: "BCKP" in bold, centered
-        let title = "BCKP"
-        let fontSize = size * 0.20
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .heavy)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraph,
-            .kern: size * 0.01
-        ]
-        let text = NSAttributedString(string: title, attributes: attrs)
-        let textRect = NSRect(x: rect.minX + size * 0.10, y: rect.minY + size * 0.18, width: rect.width - size * 0.20, height: fontSize * 1.2)
-        text.draw(in: textRect)
+    // No text or extra ornaments — minimal white arrow on blue
 
         img.unlockFocus()
         return img
