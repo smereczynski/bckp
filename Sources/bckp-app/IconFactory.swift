@@ -17,38 +17,27 @@ enum IconFactory {
         let gradient = NSGradient(starting: top, ending: bottom)
         gradient?.draw(in: bgPath, angle: 90)
 
-        // Symbol: circular backup arrow (white)
-        let symbolColor = NSColor.white
-        symbolColor.set()
-
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        let ringRadius = size * 0.28
-        let ringLineWidth = size * 0.065
-        let startAngle: CGFloat = 35
-        let endAngle: CGFloat = 320
-
-        let ringPath = NSBezierPath()
-        ringPath.lineWidth = ringLineWidth
-        ringPath.lineCapStyle = .round
-        ringPath.appendArc(withCenter: center, radius: ringRadius, startAngle: startAngle, endAngle: endAngle, clockwise: false)
-        ringPath.stroke()
-
-        // Arrow head at endAngle
-        let arrowLen = ringLineWidth * 2.1
-        let arrowWidth = ringLineWidth * 1.2
-        let theta = endAngle * (.pi / 180)
-        let endPt = CGPoint(x: center.x + ringRadius * cos(theta), y: center.y + ringRadius * sin(theta))
-        let dir = CGPoint(x: cos(theta), y: sin(theta))
-        // Perpendicular vector
-        let perp = CGPoint(x: -dir.y, y: dir.x)
-        let a1 = CGPoint(x: endPt.x - dir.x * arrowLen + perp.x * arrowWidth, y: endPt.y - dir.y * arrowLen + perp.y * arrowWidth)
-        let a2 = CGPoint(x: endPt.x - dir.x * arrowLen - perp.x * arrowWidth, y: endPt.y - dir.y * arrowLen - perp.y * arrowWidth)
-        let arrowPath = NSBezierPath()
-        arrowPath.move(to: endPt)
-        arrowPath.line(to: a1)
-        arrowPath.line(to: a2)
-        arrowPath.close()
-        arrowPath.fill()
+        // Foreground: a large white monospaced capital 'B'
+        let title = "B"
+        let fontSize = size * 0.62
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .heavy)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraph
+        ]
+        let text = NSAttributedString(string: title, attributes: attrs)
+        // Center the glyph within the rounded rect with comfortable side insets
+        let textHeight = fontSize * 1.08
+        let textRect = NSRect(
+            x: rect.minX + size * 0.12,
+            y: rect.midY - textHeight / 2,
+            width: rect.width - size * 0.24,
+            height: textHeight
+        )
+        text.draw(in: textRect)
 
     // No text or extra ornaments — minimal white arrow on blue
 
