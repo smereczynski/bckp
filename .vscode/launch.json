@@ -1,0 +1,40 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:bckp}",
+            "name": "Debug bckp",
+            "program": "${workspaceFolder:bckp}/.build/debug/bckp",
+            "preLaunchTask": "swift: Build Debug bckp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:bckp}",
+            "name": "Release bckp",
+            "program": "${workspaceFolder:bckp}/.build/release/bckp",
+            "preLaunchTask": "swift: Build Release bckp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:bckp}",
+            "name": "Debug bckp-app",
+            "program": "${workspaceFolder:bckp}/.build/debug/bckp-app",
+            "preLaunchTask": "swift: Build Debug bckp-app"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:bckp}",
+            "name": "Release bckp-app",
+            "program": "${workspaceFolder:bckp}/.build/release/bckp-app",
+            "preLaunchTask": "swift: Build Release bckp-app"
+        }
+    ]
+}

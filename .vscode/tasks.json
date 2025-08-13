@@ -1,0 +1,51 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Swift Build",
+			"type": "shell",
+			"command": "swift",
+			"args": [
+				"build"
+			],
+			"group": "build",
+			"problemMatcher": [
+				"$swiftc"
+			]
+		},
+		{
+			"label": "Swift Test",
+			"type": "shell",
+			"command": "swift",
+			"args": [
+				"test"
+			],
+			"group": "test",
+			"problemMatcher": [
+				"$swiftc"
+			]
+		},
+		{
+			"label": "Run bckp",
+			"type": "shell",
+			"command": "swift",
+			"args": [
+				"run",
+				"bckp"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Swift Build",
+			"type": "shell",
+			"command": "swift",
+			"args": [
+				"build"
+			],
+			"problemMatcher": [
+				"$swiftc"
+			],
+			"group": "build"
+		}
+	]
+}
