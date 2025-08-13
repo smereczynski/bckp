@@ -39,7 +39,7 @@ enum IconFactory {
         )
         text.draw(in: textRect)
 
-    // No text or extra ornaments — minimal white arrow on blue
+    // No extra text or ornaments — minimal large white 'B' on blue
 
         img.unlockFocus()
         return img
