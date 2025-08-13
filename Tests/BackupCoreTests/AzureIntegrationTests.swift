@@ -50,15 +50,16 @@ final class AzureIntegrationTests: XCTestCase {
         let items = try manager.listSnapshotsInAzure(containerSASURL: sasURL)
         XCTAssertTrue(items.contains(where: { $0.id == snap.id }), "Uploaded snapshot should be listed")
 
-        // Restore to a temp directory and verify contents
+    // Restore to a temp directory and verify contents
         let restoreDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("bckp-azure-int-dst-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: restoreDir, withIntermediateDirectories: true)
         try manager.restoreFromAzure(snapshotId: snap.id, containerSASURL: sasURL, to: restoreDir, concurrency: 2)
 
         // Validate restored files
-        let restoredFile1 = restoreDir.appendingPathComponent("file1.txt")
-        let restoredFile2 = restoreDir.appendingPathComponent("sub/file2.txt")
+    let root = src.lastPathComponent
+    let restoredFile1 = restoreDir.appendingPathComponent("\(root)/file1.txt")
+    let restoredFile2 = restoreDir.appendingPathComponent("\(root)/sub/file2.txt")
         XCTAssertTrue(FileManager.default.fileExists(atPath: restoredFile1.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: restoredFile2.path))
         let c1 = try String(contentsOf: restoredFile1, encoding: .utf8)

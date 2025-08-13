@@ -274,9 +274,9 @@ public extension BackupManager {
     /// Initialize a cloud repo by writing a config.json at the container root.
     func initAzureRepo(containerSASURL: URL) throws {
         let client = AzureBlobClient(containerSASURL: containerSASURL)
-        // If already exists, throw
+    // If already exists, do nothing (idempotent)
         let exists = (try? client.exists(blobPath: "config.json")) ?? false
-        if exists { throw BackupError.repoAlreadyExists(containerSASURL) }
+    if exists { return }
         let cfg = RepoConfig(version: 1, createdAt: Date())
         let data = try JSON.encoder.encode(cfg)
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-config.json")
