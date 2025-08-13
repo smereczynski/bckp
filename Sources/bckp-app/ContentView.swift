@@ -192,6 +192,13 @@ final class AppModel: ObservableObject {
 
     func append(_ s: String) { log.append(s) }
 
+    /// Copy the entire log to the macOS clipboard
+    func copyLogToClipboard() {
+        let paste = NSPasteboard.general
+        paste.clearContents()
+        paste.setString(log.joined(separator: "\n"), forType: .string)
+    }
+
     // MARK: - Config load/save
     func loadConfig() {
         let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
@@ -370,8 +377,12 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
         }
         .frame(minHeight: 160)
+        .contextMenu {
+            Button("Copy All") { model.copyLogToClipboard() }
+        }
     }
 
     // MARK: Toolbar
@@ -408,6 +419,11 @@ struct ContentView: View {
         ToolbarItem(placement: .automatic) {
             Button(action: { model.refreshSnapshots() }) {
                 Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        }
+        ToolbarItem(placement: .automatic) {
+            Button(action: { model.copyLogToClipboard() }) {
+                Label("Copy Log", systemImage: "doc.on.doc")
             }
         }
     }
