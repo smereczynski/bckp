@@ -9,3 +9,7 @@ DerivedData/
 
 # Logs
 *.log
+
+# bckp config (user-specific)
+bckp.config
+.config/bckp/config

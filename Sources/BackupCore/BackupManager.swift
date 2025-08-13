@@ -300,7 +300,7 @@ public final class BackupManager {
 
     // Helpers
     /// Create a human-sortable ID using the current timestamp and a short random suffix.
-    private static func makeSnapshotId() -> String {
+    static func makeSnapshotId() -> String {
         let ts = ISO8601DateFormatter()
         ts.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
         let stamp = ts.string(from: Date()).replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").replacingOccurrences(of: ".", with: "")
@@ -309,7 +309,7 @@ public final class BackupManager {
     }
 
     /// Compute a safe relative path of `child` under `base`, accounting for symlinks in parent components (e.g., /var vs /private/var).
-    private static func relativePath(of child: URL, under base: URL) -> String {
+    static func relativePath(of child: URL, under base: URL) -> String {
         let childPath = child.standardizedFileURL.path
         let basePath = base.standardizedFileURL.path
         if childPath == basePath { return "" }
@@ -321,7 +321,7 @@ public final class BackupManager {
     }
 
     // MARK: Filtering
-    private static func isIncluded(relPath: String, options: BackupOptions) -> Bool {
+    static func isIncluded(relPath: String, options: BackupOptions) -> Bool {
         // Directories: always include so we can traverse; filtering applies to files/symlinks only.
         // Callers should use this only for non-directories.
         if !options.include.isEmpty {
@@ -331,7 +331,7 @@ public final class BackupManager {
         return true
     }
 
-    private static func isIncluded(relPath: String, include: [String], exclude: [String], reincludes: [String]) -> Bool {
+    static func isIncluded(relPath: String, include: [String], exclude: [String], reincludes: [String]) -> Bool {
         // Apply include first (if present)
         if !include.isEmpty && !anyMatch(include, path: relPath) { return false }
         // Apply exclude unless re-included

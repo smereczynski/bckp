@@ -1,0 +1,21 @@
+# bckp configuration file (sample)
+# Copy this to one of:
+#  - ./bckp.config (project-local)
+#  - ~/.config/bckp/config (user-wide)
+# and edit values.
+
+[repo]
+# Local repository root path
+path = 
+
+[backup]
+# Comma-separated include patterns (glob). Leave empty for all.
+include = **/*
+# Comma-separated exclude patterns (glob)
+exclude = **/.git/**, **/node_modules/**
+# Max concurrent operations (0 or omit to use CPU count)
+concurrency = 0
+
+[azure]
+# Azure Blob Storage container SAS URL (keep this secret!)
+sas = 
