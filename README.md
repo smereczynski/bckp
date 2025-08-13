@@ -43,6 +43,9 @@ swift test               # run tests (requires full Xcode SDKs)
 ```
 
 ### Run the GUI (SwiftUI app)
+> [!WARNING]  
+> GUI is in heavy development and should NOT be considered as usable yet!
+
 ```bash
 swift run bckp-app
 ```
