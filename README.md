@@ -1,6 +1,6 @@
 # bckp
 
-A simple, native macOS backup CLI written in Swift. Creates snapshot folders you can browse and restore from.
+A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates snapshot folders you can browse and restore from.
 
 - Language: Swift 5.9+
 - Target: macOS 13+
@@ -11,10 +11,11 @@ A simple, native macOS backup CLI written in Swift. Creates snapshot folders you
 - Create snapshot(s) from one or more source directories
 - Restore a snapshot to any destination
 - List snapshots with counts and sizes
- - Include/Exclude glob patterns (relative to each source)
- - Prune snapshots by keeping the last N and/or last D days
- - Concurrency control and progress reporting during backup
- - .bckpignore support per source folder (with !reinclude lines)
+- Include/Exclude glob patterns (relative to each source)
+- Prune snapshots by keeping the last N and/or last D days
+- Concurrency control and progress reporting during backup
+- .bckpignore support per source folder (with !reinclude lines)
+- Cloud repository (optional): Azure Blob Storage via SAS URL
 
 Repository layout:
 ```
@@ -40,6 +41,38 @@ swift build              # compile
 swift run bckp --help    # show commands
 swift test               # run tests (requires full Xcode SDKs)
 ```
+
+### Run the GUI (SwiftUI app)
+```bash
+swift run bckp-app
+```
+The app lets you:
+- Choose and initialize a local repository
+- Add sources, run backups with progress, and view logs
+- Edit configuration (include/exclude, concurrency, Azure SAS)
+- Run Cloud actions (Init, List, Cloud Backup, Cloud Restore)
+
+### Configuration
+The CLI and GUI read defaults from a simple config file. Flags always override config.
+
+Locations (first found wins):
+- `./bckp.config` next to the default repo (created by the app when saving), or
+- `~/.config/bckp/config`
+
+Format (INI-like):
+```
+[repo]
+path = /Users/you/Backups/bckp
+
+[backup]
+include = **/*
+exclude = **/.git/**, **/node_modules/**
+concurrency = 8
+
+[azure]
+sas = https://acct.blob.core.windows.net/container?sv=...&sig=...
+```
+A `config.sample` is provided in the repo. The real config is ignored by git.
 
 ### Initialize a repo
 ```bash
@@ -110,6 +143,42 @@ ls -l .build/release/bckp
 
 You can copy the built binary to a directory in your PATH (e.g., `~/bin`) or wrap it in a small `.pkg`/`.dmg` later.
 
+### Azure (SAS) Cloud Repo
+You can pass `--sas` explicitly, or omit it to use the value from your config.
+
+- Initialize the container as a repo (writes config.json at container root)
+```bash
+swift run bckp init-azure --sas "https://<acct>.blob.core.windows.net/<container>?sv=...&sig=..."
+# or use config: set [azure] sas in your config and run
+swift run bckp init-azure
+```
+
+- Backup to Azure
+```bash
+swift run bckp backup-azure --source ~/Documents --source ~/Pictures \
+  --include "**/*" --exclude "**/.git/**" --concurrency 8 --progress
+# optionally add --sas to override config
+```
+
+- List Azure snapshots
+```bash
+swift run bckp list-azure   # uses config SAS, or add --sas
+```
+
+- Restore from Azure
+```bash
+swift run bckp restore-azure <SNAPSHOT_ID> --destination /tmp/restore --concurrency 8
+# optionally add --sas to override config
+```
+
+- Prune Azure snapshots
+```bash
+swift run bckp prune-azure --keep-last 10  # or --keep-days D
+# optionally add --sas to override config
+```
+
+Azure SAS: use a container-level SAS. For backup: write + list (and create). For restore/list: read (and list). Keep SAS secrets safe.
+
 ## Notes
 - Current version copies files; deduplication/hard-linking can be added later.
 - Symlinks are preserved when possible.
@@ -117,8 +186,7 @@ You can copy the built binary to a directory in your PATH (e.g., `~/bin`) or wra
 - Some folders require Full Disk Access. Grant your Terminal app Full Disk Access in System Settings > Privacy & Security.
 - Tests may fail with `no such module XCTest` if only Command Line Tools are installed. Install full Xcode and run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
 
-## Future enhancements
-- .bckpignore file support and per-source overrides
-- Progress reporting and concurrency
-- Verification and smarter pruning strategies (e.g., GFS)
-- SwiftUI app wrapping the core library
+### Tests (Azure integration)
+- `swift test` runs local tests and an optional Azure integration test.
+- If `~/.config/bckp/config` contains a valid `[azure] sas`, the Azure test performs init, upload, list, and restore against your container.
+- If SAS is missing/empty, the Azure test is skipped with a clear message.

@@ -3,10 +3,11 @@
 This document explains how the code is organized, what each file does, and how pieces fit together.
 
 ## High-level design
-- The project is a Swift Package with two targets:
-  - `BackupCore` (a library): all backup logic lives here.
-  - `bckp-cli` (an executable): a command-line app that calls the core library.
-- Tests live under `Tests/` and verify basic behavior of the core library.
+- Swift Package with three products/targets:
+  - `BackupCore` (library): all backup logic + Azure client + config types.
+  - `bckp` (executable): CLI built with ArgumentParser (local + Azure subcommands).
+  - `bckp-app` (executable): SwiftUI GUI that wraps BackupCore.
+- Tests live under `Tests/` for core and optional Azure integration.
 
 ## Folder structure
 ```
@@ -16,14 +17,21 @@ This document explains how the code is organized, what each file does, and how p
 ├─ SOURCE-README.md           # This document
 ├─ Sources/
 │  ├─ BackupCore/             # Library source
-│  │  ├─ BackupManager.swift  # Main backup engine (init, backup, restore, list)
-│  │  ├─ Models.swift         # Data models: Snapshot, RepoConfig, etc.
-│  │  └─ Utilities.swift      # Errors and small helpers (JSON, size formatting)
-│  └─ bckp-cli/
-│     └─ main.swift           # CLI entry point, subcommands and options
+│  │  ├─ BackupManager.swift  # Main backup engine (local + Azure helpers)
+│  │  ├─ Models.swift         # Data models: Snapshot, RepoConfig, options, etc.
+│  │  ├─ Utilities.swift      # Errors, glob matching, JSON helpers, formatting
+│  │  ├─ AzureBlob.swift      # Minimal Azure Blob client + BackupManager extension
+│  │  ├─ Config.swift         # AppConfig + AppConfigIO (INI-like) with [azure] sas
+│  │  └─ CloudProvider.swift  # Protocol for future cloud backends
+│  ├─ bckp-cli/
+│  │  └─ main.swift           # CLI entry point, local + Azure subcommands
+│  └─ bckp-app/
+│     ├─ App.swift            # SwiftUI app entry
+│     └─ ContentView.swift    # GUI (repo, sources, config, cloud actions)
 └─ Tests/
    └─ BackupCoreTests/
-      └─ BackupCoreTests.swift # End-to-end test of init/backup/restore
+  ├─ BackupCoreTests.swift       # End-to-end local init/backup/restore + features
+  └─ AzureIntegrationTests.swift # Optional Azure SAS-based integration test
 ```
 
 ## File-by-file overview
@@ -39,10 +47,18 @@ This document explains how the code is organized, what each file does, and how p
 
 ### BackupCore/Utilities.swift
 - Defines `BackupError` so we can report readable errors.
-- Adds tiny helpers:
-  - `URL.isDirectory` to quickly check if a path is a directory.
-  - `ByteCountFormatter.string(fromBytes:)` to display bytes as `1.2 MB`.
-  - `JSON` encoder/decoder with ISO 8601 dates.
+- Helpers: `URL.isDirectory`, byte count formatting, JSON helpers, glob matching, `.bckpignore` parsing.
+
+### BackupCore/AzureBlob.swift
+- Minimal SAS-based client (URLSession) supporting Put Block/List, Get, Delete.
+- `BackupManager` extension adds Azure-specific init/backup/list/restore/prune.
+
+### BackupCore/Config.swift
+- `AppConfig` and `AppConfigIO` load/save INI-like config.
+- Sections: [repo], [backup] (include/exclude/concurrency), [azure] (sas).
+
+### BackupCore/CloudProvider.swift
+- `CloudProvider` protocol + AzureBlobProvider wrapper for future backends.
 
 ### BackupCore/BackupManager.swift
 - The main engine used by the CLI and tests.
@@ -56,21 +72,19 @@ This document explains how the code is organized, what each file does, and how p
 - Skips hidden files when backing up (you can change this behavior in code).
 
 ### bckp-cli/main.swift
-- The command line tool built with `ArgumentParser`.
-- Defines subcommands:
-  - `init-repo` – initialize a repository folder.
-  - `backup` – create a snapshot from one or more sources.
-  - `restore` – restore a snapshot to a destination.
-  - `list` – print all snapshots.
-- Each subcommand has options (e.g., `--repo`, `--source`) and a `run()` method.
+- ArgumentParser-based CLI with local and Azure subcommands.
+- Local: `init-repo`, `backup`, `restore`, `list`, `prune`.
+- Azure: `init-azure`, `backup-azure`, `list-azure`, `restore-azure`, `prune-azure`.
+- Many flags are optional when defaults exist in config (e.g., SAS).
 
-### Tests/BackupCoreTests.swift
-- Creates temporary folders, writes sample files, then:
-  - Initializes a repo
-  - Runs a backup
-  - Lists snapshots
-  - Restores the snapshot
-  - Verifies files exist at the expected destination paths
+### bckp-app (SwiftUI)
+- GUI wrapping BackupCore.
+- Sidebar: repo chooser/init, sources, configuration editor (include/exclude, concurrency, SAS), Cloud actions.
+- Cloud: Init/List/Backup/Restore wired to SAS from config.
+
+### Tests
+- `BackupCoreTests.swift`: local E2E including include/exclude, symlinks, pruning, concurrency.
+- `AzureIntegrationTests.swift`: loads SAS from `~/.config/bckp/config` and runs init/upload/list/restore if present; otherwise skips with a clear message.
 
 ## How pieces relate
 - The CLI depends on `BackupCore` and just forwards user input to `BackupManager`.
@@ -89,7 +103,8 @@ This document explains how the code is organized, what each file does, and how p
 ```
 
 ## Tips for learners
-- Start by reading `bckp-cli/main.swift` to see how the app is used.
-- Then open `BackupManager.swift` to follow the backup/restore logic.
-- Check `Models.swift` and `Utilities.swift` to understand the data and helpers.
-- Finally, run `swift run bckp --help` to explore commands.
+- Start by reading `bckp-cli/main.swift` to see commands and options.
+- Then open `BackupManager.swift` (and `AzureBlob.swift`) to follow core + cloud logic.
+- Check `Models.swift`, `Utilities.swift`, and `Config.swift` to understand the data and helpers.
+- Explore the GUI in `Sources/bckp-app/ContentView.swift` to see how the app ties together.
+- Run `swift run bckp --help` and `swift run bckp-app` to try it.
