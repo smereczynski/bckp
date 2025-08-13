@@ -289,10 +289,11 @@ public final class BackupManager {
             return []
         }
         var items: [SnapshotListItem] = []
-        for dir in entries where dir.isDirectory {
+    for dir in entries where dir.isDirectory {
             let manifest = dir.appendingPathComponent("manifest.json")
             if let data = try? Data(contentsOf: manifest), let snap = try? JSON.decoder.decode(Snapshot.self, from: data) {
-                items.append(SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes))
+        // Use full source paths in listings
+        items.append(SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources))
             }
         }
         return items.sorted { $0.createdAt < $1.createdAt }

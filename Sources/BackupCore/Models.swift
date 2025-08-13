@@ -26,6 +26,8 @@ public struct SnapshotListItem: Codable, Equatable {
     public let createdAt: Date
     public let totalFiles: Int
     public let totalBytes: Int64
+    /// Displayable source labels (usually lastPathComponent of each source path)
+    public let sources: [String]
 }
 
 /// Repository configuration saved at the root of the backup repo.
