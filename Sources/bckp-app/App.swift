@@ -6,6 +6,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    // Set custom Dock icon generated at runtime
+    let icon = IconFactory.makeAppIcon(size: 1024)
+    NSApplication.shared.applicationIconImage = icon
     }
 }
 
