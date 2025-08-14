@@ -8,8 +8,6 @@ import BackupCore
 //   bckp backup --source <path> --repo <path>
 // Each subcommand is a small struct with options/arguments and a run() method.
 
-private let kListColumnsDescription = "Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes)<TAB>Sources (comma-separated full paths)"
-
 struct Bckp: ParsableCommand {
     static var configuration = CommandConfiguration(
         commandName: "bckp",
@@ -106,7 +104,7 @@ extension Bckp {
 
     /// Print a list of snapshots in the repository.
     struct List: ParsableCommand {
-    static var configuration = CommandConfiguration(abstract: "List snapshots in a repository. \(kListColumnsDescription)")
+        static var configuration = CommandConfiguration(abstract: "List snapshots in a repository. Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes)<TAB>Sources (comma-separated full paths)")
 
         @Option(name: .shortAndLong, help: "Path to the repository root (default ~/Backups/bckp)")
         var repo: String?
@@ -216,7 +214,7 @@ extension Bckp {
     }
 
     struct ListAzure: ParsableCommand {
-    static var configuration = CommandConfiguration(abstract: "List snapshots in an Azure Blob repo (SAS). \(kListColumnsDescription)")
+        static var configuration = CommandConfiguration(abstract: "List snapshots in an Azure Blob repo (SAS). Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes)<TAB>Sources (comma-separated full paths)")
 
         @Option(name: .long, help: "Azure container SAS URL (can be set in config)")
         var sas: String?
