@@ -320,6 +320,7 @@ struct ContentView: View {
                             .tag(it.id)
                             .contentShape(Rectangle())
                             .onTapGesture { selectedCloudSnapshotID = it.id }
+                            .listRowBackground((selectedCloudSnapshotID == it.id) ? Color.accentColor.opacity(0.15) : Color.clear)
                     }
                 }
             }
@@ -483,15 +484,37 @@ private struct SnapshotRow: View {
                 Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                if !item.sources.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+                        Text(item.sources.joined(separator: ", "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                    }
+                }
             }
             Spacer()
             Label("\(item.totalFiles)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
-            Text(ByteCountFormatter.string(fromByteCount: item.totalBytes, countStyle: .file))
+            Text("\(item.totalBytes)B")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        .if(!item.sources.isEmpty) { view in
+            view.help(item.sources.joined(separator: "\n"))
+        }
+    }
+}
+
+// MARK: - View helpers
+private extension View {
+    @ViewBuilder
+    func `if`(_ condition: Bool, transform: (Self) -> some View) -> some View {
+        if condition { transform(self) } else { self }
     }
 }

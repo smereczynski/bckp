@@ -408,7 +408,8 @@ public extension BackupManager {
                 try client.download(to: tmp, blobPath: "snapshots/\(id)/manifest.json")
                 let data = try Data(contentsOf: tmp)
                 if let snap = try? JSON.decoder.decode(Snapshot.self, from: data) {
-                    items.append(SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes))
+                    // Use full source paths in listings
+                    items.append(SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources))
                 }
             } catch {
                 // Skip malformed snapshots
