@@ -484,7 +484,7 @@ private struct SnapshotRow: View {
             Label("\(item.totalFiles)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
-            Text("\(item.totalBytes)B")
+            Text("\(item.totalBytes)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
