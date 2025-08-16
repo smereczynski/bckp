@@ -112,7 +112,13 @@ public final class RepositoriesConfigStore {
         if let idx = sources.firstIndex(where: { $0.path == path }) {
             var s = sources[idx]; update(&s); sources[idx] = s
         } else {
-            var s = RepoSourceInfo(path: path, lastBackupAt: nil); update(&s); sources.append(s)
+            var s = sources[idx]
+            update(&s)
+            sources[idx] = s
+        } else {
+            var s = RepoSourceInfo(path: path, lastBackupAt: nil)
+            update(&s)
+            sources.append(s)
         }
     }
 
