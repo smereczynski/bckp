@@ -16,6 +16,7 @@ A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates
 - Concurrency control and progress reporting during backup
 - .bckpignore support per source folder (with !reinclude lines)
 - Cloud repository (optional): Azure Blob Storage via SAS URL
+- Global history: repositories.json tracks recently used repositories (local/Azure), configured sources, and per-source last backup time
 
 Repository layout:
 ```
@@ -76,6 +77,42 @@ concurrency = 8
 sas = https://acct.blob.core.windows.net/container?sv=...&sig=...
 ```
 A `config.sample` is provided in the repo. The real config is ignored by git.
+
+### Repositories history (global)
+The tool maintains a global JSON file to help surfaces like the GUI list “recent repositories” and show when each source was last backed up.
+
+- Location (macOS): `~/Library/Application Support/bckp/repositories.json`
+- Tracks, per repository (local path or Azure container URL):
+  - lastUsedAt (when the repo was last initialized/restored/backed up)
+  - sources[] with `path` and `lastBackupAt` (per-source timestamp)
+
+When it updates:
+- Local: `init-repo` and `restore` update `lastUsedAt`; `backup` also ensures sources are present and sets `lastBackupAt` for each backed-up source.
+- Azure: `init-azure` and `restore-azure` update `lastUsedAt`; `backup-azure` updates per-source `lastBackupAt`.
+
+Sample shape:
+```
+{
+  "version": 1,
+  "repositories": [
+    {
+      "key": "/Users/you/Backups/bckp",
+      "type": "local",
+      "lastUsedAt": "2025-08-16T12:34:56Z",
+      "sources": [
+        { "path": "/Users/you/Documents", "lastBackupAt": "2025-08-16T12:34:12Z" },
+        { "path": "/Users/you/Pictures", "lastBackupAt": "2025-08-15T09:01:02Z" }
+      ]
+    },
+    {
+      "key": "https://acct.blob.core.windows.net/container",
+      "type": "azure",
+      "lastUsedAt": "2025-08-15T07:00:00Z",
+      "sources": []
+    }
+  ]
+}
+```
 
 ### Initialize a repo
 ```bash

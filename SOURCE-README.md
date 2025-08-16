@@ -22,6 +22,7 @@ This document explains how the code is organized, what each file does, and how p
 │  │  ├─ Utilities.swift      # Errors, glob matching, JSON helpers, formatting
 │  │  ├─ AzureBlob.swift      # Minimal Azure Blob client + BackupManager extension
 │  │  ├─ Config.swift         # AppConfig + AppConfigIO (INI-like) with [azure] sas
+│  │  ├─ RepositoriesConfig.swift # Global repositories.json (recent repos, per-source last backup)
 │  │  └─ CloudProvider.swift  # Protocol for future cloud backends
 │  ├─ bckp-cli/
 │  │  └─ main.swift           # CLI entry point, local + Azure subcommands
@@ -59,6 +60,19 @@ This document explains how the code is organized, what each file does, and how p
 
 ### BackupCore/CloudProvider.swift
 - `CloudProvider` protocol + AzureBlobProvider wrapper for future backends.
+
+### BackupCore/RepositoriesConfig.swift
+- Global lightweight persistence for repository usage history.
+- File location (macOS): `~/Library/Application Support/bckp/repositories.json`.
+- Keeps an array of repositories with:
+  - `key` (local repo path or Azure container URL without query)
+  - `type` (local|azure)
+  - `lastUsedAt` (Date)
+  - `sources[]` of `{ path, lastBackupAt }`
+- Used by CLI to:
+  - Update last-used on init/restore (local and Azure)
+  - Record per-source last backup on backup/backup-azure
+  - Add newly configured sources on local backup
 
 ### BackupCore/BackupManager.swift
 - The main engine used by the CLI and tests.
