@@ -110,7 +110,16 @@ public final class RepositoriesConfigStore {
     }
 
     private func persist() {
-        if let data = try? JSON.encoder.encode(config) { try? data.write(to: fileURL, options: [.atomic]) }
+        do {
+            let data = try JSON.encoder.encode(config)
+            do {
+                try data.write(to: fileURL, options: [.atomic])
+            } catch {
+                print("Error writing repositories config to file: \(error)")
+            }
+        } catch {
+            print("Error encoding repositories config: \(error)")
+        }
     }
 
     // Keys
