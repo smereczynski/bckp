@@ -35,7 +35,6 @@ public final class RepositoriesConfigStore {
         let dir = base.appendingPathComponent("bckp", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("repositories.json")
-        if let data = try? Data(contentsOf: fileURL), let decoded = try? JSON.decoder.decode(RepositoriesConfig.self, from: data) {
         if fm.fileExists(atPath: self.fileURL.path) {
             do {
                 let data = try Data(contentsOf: self.fileURL)
