@@ -31,6 +31,7 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             try manager.initRepo(at: repoURL)
+            RepositoriesConfigStore.shared.recordRepoUsedLocal(repoPath: repoURL.path)
             print("Initialized repository at \(repoURL.path)")
         }
     }
@@ -68,6 +69,7 @@ extension Bckp {
                 let opts = BackupOptions(include: include.isEmpty ? cfg.include : include,
                                          exclude: exclude.isEmpty ? cfg.exclude : exclude,
                                          concurrency: concurrency ?? cfg.concurrency)
+            RepositoriesConfigStore.shared.updateConfiguredSourcesLocal(repoPath: repoURL.path, sources: source)
             let snap = try manager.backup(sources: sources, to: repoURL, options: opts, progress: progress ? { p in
                 let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
                 let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
@@ -76,6 +78,7 @@ extension Bckp {
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
             let sizeStr = "\(snap.totalBytes)B"
+            RepositoriesConfigStore.shared.recordBackupLocal(repoPath: repoURL.path, sources: sources)
             print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(sizeStr)")
         }
     }
@@ -98,6 +101,7 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             try manager.restore(snapshotId: id, from: repoURL, to: URL(fileURLWithPath: destination))
+            RepositoriesConfigStore.shared.recordRepoUsedLocal(repoPath: repoURL.path)
             print("Restored snapshot \(id) to \(destination)")
         }
     }
@@ -165,6 +169,7 @@ extension Bckp {
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
             try manager.initAzureRepo(containerSASURL: sasURL)
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
             print("Initialized Azure repo at container SAS")
         }
     }
@@ -209,6 +214,7 @@ extension Bckp {
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
             let sizeStr = "\(snap.totalBytes)B"
+            RepositoriesConfigStore.shared.recordBackupAzure(containerSASURL: sasURL, sources: sources)
             print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(sizeStr)")
         }
     }
@@ -256,6 +262,7 @@ extension Bckp {
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
             try manager.restoreFromAzure(snapshotId: id, containerSASURL: sasURL, to: URL(fileURLWithPath: destination), concurrency: concurrency ?? cfg.concurrency)
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
             print("Restored cloud snapshot \(id) to \(destination)")
         }
     }
