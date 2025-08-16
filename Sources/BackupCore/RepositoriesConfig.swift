@@ -118,7 +118,7 @@ public final class RepositoriesConfigStore {
 
     private func persist() {
         do {
-            let data = try JSON.encoder.encode(config)
+            let data = try JSONEncoder().encode(config)
             do {
                 try data.write(to: fileURL, options: [.atomic])
             } catch {
