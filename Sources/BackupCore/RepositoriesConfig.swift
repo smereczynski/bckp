@@ -38,7 +38,7 @@ public final class RepositoriesConfigStore {
         if fm.fileExists(atPath: self.fileURL.path) {
             do {
                 let data = try Data(contentsOf: self.fileURL)
-                self.config = try JSON.decoder.decode(RepositoriesConfig.self, from: data)
+                self.config = try JSONDecoder().decode(RepositoriesConfig.self, from: data)
             } catch {
                 print("Warning: repositories.json exists but could not be decoded. This may indicate data corruption. Error: \(error)")
                 self.config = RepositoriesConfig()
