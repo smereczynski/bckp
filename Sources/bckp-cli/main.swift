@@ -75,8 +75,8 @@ extension Bckp {
                 let cur = p.currentPath ?? ""
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
-            let sizeStr = "\(snap.totalBytes)B"
-            print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(sizeStr)")
+            let sizeStr = "\(snap.totalBytes)"
+            print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
 
@@ -104,7 +104,7 @@ extension Bckp {
 
     /// Print a list of snapshots in the repository.
     struct List: ParsableCommand {
-        static var configuration = CommandConfiguration(abstract: "List snapshots in a repository. Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes, 'B')<TAB>Sources (comma-separated full paths)")
+    static var configuration = CommandConfiguration(abstract: "List snapshots in a repository. Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes)<TAB>Sources (comma-separated full paths)")
 
         @Option(name: .shortAndLong, help: "Path to the repository root (default ~/Backups/bckp)")
         var repo: String?
@@ -119,7 +119,7 @@ extension Bckp {
             } else {
                 for it in items {
                     let sources = it.sources.joined(separator: ",")
-                    print("\(it.id)\t\(ISO8601DateFormatter().string(from: it.createdAt))\t\(it.totalFiles)\t\(it.totalBytes)B\t\(sources)")
+                    print("\(it.id)\t\(ISO8601DateFormatter().string(from: it.createdAt))\t\(it.totalFiles)\t\(it.totalBytes)\t\(sources)")
                 }
             }
         }
@@ -208,13 +208,13 @@ extension Bckp {
                 let cur = p.currentPath ?? ""
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
-            let sizeStr = "\(snap.totalBytes)B"
-            print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(sizeStr)")
+            let sizeStr = "\(snap.totalBytes)"
+            print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
 
     struct ListAzure: ParsableCommand {
-        static var configuration = CommandConfiguration(abstract: "List snapshots in an Azure Blob repo (SAS). Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes, 'B')<TAB>Sources (comma-separated full paths)")
+        static var configuration = CommandConfiguration(abstract: "List snapshots in an Azure Blob repo (SAS). Columns: ID<TAB>ISO8601 Date<TAB>Files<TAB>Size (bytes)<TAB>Sources (comma-separated full paths)")
 
         @Option(name: .long, help: "Azure container SAS URL (can be set in config)")
         var sas: String?
@@ -229,7 +229,7 @@ extension Bckp {
             else {
                 for it in items {
                     let sources = it.sources.joined(separator: ",")
-                    print("\(it.id)\t\(ISO8601DateFormatter().string(from: it.createdAt))\t\(it.totalFiles)\t\(it.totalBytes)B\t\(sources)")
+                    print("\(it.id)\t\(ISO8601DateFormatter().string(from: it.createdAt))\t\(it.totalFiles)\t\(it.totalBytes)\t\(sources)")
                 }
             }
         }
