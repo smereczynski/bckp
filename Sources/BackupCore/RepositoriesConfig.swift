@@ -58,7 +58,12 @@ public final class RepositoriesConfigStore {
 
     public func recordBackupLocal(repoPath: String, sources: [URL], when: Date = Date()) {
         let key = Self.keyForLocal(path: repoPath)
-        queue.sync {
+        queue.async { upsertRepo(key: key, type: "local") { repo in repo.lastUsedAt = when } }
+    }
+
+    public func recordBackupLocal(repoPath: String, sources: [URL], when: Date = Date()) {
+        let key = Self.keyForLocal(path: repoPath)
+        queue.async {
             upsertRepo(key: key, type: "local") { repo in
                 repo.lastUsedAt = when
                 for s in sources.map({ $0.path }) { upsertSource(into: &repo.sources, path: s) { $0.lastBackupAt = when } }
