@@ -500,7 +500,7 @@ private struct SnapshotRow: View {
             Label("\(item.totalFiles)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
-            Text("\(item.totalBytes)")
+            Text(Self.formatBytes(item.totalBytes))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
