@@ -474,6 +474,7 @@ private struct SourceRow: View {
 /// Render a snapshot row showing ID (monospaced) and file count.
 private struct SnapshotRow: View {
     let item: SnapshotListItem
+    private static func formatBytes(_ v: Int64) -> String { String(v) }
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
@@ -500,7 +501,7 @@ private struct SnapshotRow: View {
             Label("\(item.totalFiles)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
-            Text("\(item.totalBytes)B")
+            Text(Self.formatBytes(item.totalBytes))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
