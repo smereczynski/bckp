@@ -126,7 +126,7 @@ public final class RepositoriesConfigStore {
             do {
                 try data.write(to: fileURL, options: [.atomic])
             } catch {
-                print("Error writing repositories config to file: \(error)")
+                print("Error writing repositories config to file '\(fileURL.path)': \(error)")
             }
         } catch {
             print("Error encoding repositories config: \(error)")
