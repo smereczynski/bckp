@@ -25,8 +25,22 @@ public struct RepoSourceInfo: Codable, Equatable {
 }
 
 // MARK: - Store
+/// Persists lightweight usage telemetry for repositories in a JSON file.
+///
+/// File location (macOS): `~/Library/Application Support/bckp/repositories.json`
+/// - Date encoding: ISO8601
+/// - Keys:
+///   - Local repositories: standardized absolute path
+///   - Azure repositories: container URL without SAS query/fragment
+///
+/// Updated by CLI on init/backup/restore/list/prune (local and Azure). The GUI
+/// reads this file to display "Last used" and per-source "Last backup" data,
+/// and the Repositories panel observes it for live updates.
 public final class RepositoriesConfigStore {
     public static let shared = RepositoriesConfigStore()
+    // Test seam: when set (via @testable), the store reads/writes to this
+    // location instead of the default Application Support path.
+    static var overrideFileURL: URL?
 
     private let ioQueue = DispatchQueue(label: "bckp.repositories.config.io")
     private let encoder: JSONEncoder = {
@@ -152,7 +166,9 @@ public final class RepositoriesConfigStore {
     }
 
     // MARK: - Locations/Keys
+    /// Default file URL for repositories.json. Tests can override via `overrideFileURL`.
     static func fileURL() -> URL {
+        if let o = overrideFileURL { return o }
         #if os(macOS)
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
         #else
@@ -162,15 +178,29 @@ public final class RepositoriesConfigStore {
         return dir.appendingPathComponent("repositories.json")
     }
 
+    /// Normalized key for a local repository: standardized absolute path.
     public static func keyForLocal(_ repoURL: URL) -> String {
         repoURL.standardizedFileURL.path
     }
 
+    /// Normalized key for an Azure container: URL without query/fragment (no SAS).
     public static func keyForAzure(_ containerSASURL: URL) -> String {
         var comps = URLComponents(url: containerSASURL, resolvingAgainstBaseURL: false)
         comps?.query = nil
         comps?.fragment = nil
         return comps?.url?.absoluteString ?? containerSASURL.absoluteString
+    }
+}
+
+// MARK: - Test helpers (internal)
+extension RepositoriesConfigStore {
+    /// Reset in-memory config to empty and persist to current file URL.
+    /// Intended for unit tests via `@testable import`.
+    func resetForTesting() {
+        ioQueue.sync {
+            self.config = RepositoriesConfig()
+            persist()
+        }
     }
 }
 

@@ -13,7 +13,7 @@ struct Bckp: ParsableCommand {
         commandName: "bckp",
         abstract: "Simple macOS backup tool",
         version: "0.1.0",
-        subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self],
+    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self],
         defaultSubcommand: nil
     )
 }
@@ -287,6 +287,42 @@ extension Bckp {
             let result = try manager.pruneInAzure(containerSASURL: sasURL, policy: policy)
             print("Pruned (cloud). Deleted: \(result.deleted.count) | Kept: \(result.kept.count)")
             if !result.deleted.isEmpty { print("Deleted IDs: \(result.deleted.joined(separator: ", "))") }
+        }
+    }
+}
+
+// MARK: - Inspect repositories.json
+extension Bckp {
+    struct Repos: ParsableCommand {
+        static var configuration = CommandConfiguration(abstract: "Inspect tracked repositories usage (repositories.json). Columns: KEY<TAB>LastUsedISO8601<TAB>SourcePath<TAB>LastBackupISO8601")
+
+        @Flag(name: .long, help: "Output as pretty JSON instead of tab-separated rows")
+        var json: Bool = false
+
+        func run() throws {
+            let cfg = RepositoriesConfigStore.shared.config
+            if json {
+                let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]; enc.dateEncodingStrategy = .iso8601
+                let data = try enc.encode(cfg)
+                if let s = String(data: data, encoding: .utf8) { print(s) }
+                return
+            }
+            if cfg.repositories.isEmpty {
+                print("No repositories tracked yet")
+                return
+            }
+            let dateFmt = ISO8601DateFormatter()
+            for (key, info) in cfg.repositories.sorted(by: { $0.key < $1.key }) {
+                let lastUsed = info.lastUsedAt.map { dateFmt.string(from: $0) } ?? ""
+                if info.sources.isEmpty {
+                    print("\(key)\t\(lastUsed)\t\t")
+                } else {
+                    for s in info.sources.sorted(by: { $0.path < $1.path }) {
+                        let lb = s.lastBackupAt.map { dateFmt.string(from: $0) } ?? ""
+                        print("\(key)\t\(lastUsed)\t\(s.path)\t\(lb)")
+                    }
+                }
+            }
         }
     }
 }
