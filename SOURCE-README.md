@@ -27,7 +27,8 @@ This document explains how the code is organized, what each file does, and how p
 │  │  └─ main.swift           # CLI entry point, local + Azure subcommands
 │  └─ bckp-app/
 │     ├─ App.swift            # SwiftUI app entry
-│     └─ ContentView.swift    # GUI (repo, sources, config, cloud actions)
+│     ├─ ContentView.swift    # GUI (repo, sources, config, cloud actions)
+│     └─ RepositoriesPanel.swift # GUI: dedicated panel to view repositories.json (filter, sort, live refresh)
 └─ Tests/
    └─ BackupCoreTests/
   ├─ BackupCoreTests.swift       # End-to-end local init/backup/restore + features
@@ -41,17 +42,23 @@ This document explains how the code is organized, what each file does, and how p
 - Declares a dependency on `swift-argument-parser` so we can build a nice CLI.
 
 ### BackupCore/Models.swift
-- Contains the small data types we save as JSON, like `Snapshot` and `RepoConfig`.
-- `Codable` makes it easy to serialize/deserialize to/from JSON.
-- `Equatable` allows comparing values in tests.
+// … models for snapshots/config/options
 
-### BackupCore/Utilities.swift
-- Defines `BackupError` so we can report readable errors.
-- Helpers: `URL.isDirectory`, byte count formatting, JSON helpers, glob matching, `.bckpignore` parsing.
-
+### BackupCore/RepositoriesConfig.swift
+- Persists repository usage: lastUsedAt per repo, lastBackupAt per source.
+- Models: `RepositoriesConfig` { repositories: [String: RepositoryInfo] }, `RepositoryInfo` { lastUsedAt, sources }, `RepoSourceInfo` { path, lastBackupAt }.
+- Store: `RepositoriesConfigStore.shared` reads/writes `~/Library/Application Support/bckp/repositories.json` with ISO8601 dates.
+- Keys normalize local repo paths and strip SAS query/fragment from Azure container URLs.
+- Called from CLI on init/backup/restore/list/prune (local and Azure) to update last-used and per-source last-backup.
+- Tests live in `Tests/BackupCoreTests/RepositoriesConfigStoreTests.swift`.
 ### BackupCore/AzureBlob.swift
-- Minimal SAS-based client (URLSession) supporting Put Block/List, Get, Delete.
-- `BackupManager` extension adds Azure-specific init/backup/list/restore/prune.
+
+### bckp-cli/main.swift
+- ArgumentParser-based CLI with local and Azure subcommands.
+- Local: `init-repo`, `backup`, `restore`, `list`, `prune`.
+- Azure: `init-azure`, `backup-azure`, `list-azure`, `restore-azure`, `prune-azure`.
+- Repositories inspector: `repos` subcommand prints tab-separated rows or `--json`.
+- Size columns are in raw bytes (no unit suffix) for easy scripting.
 
 ### BackupCore/Config.swift
 - `AppConfig` and `AppConfigIO` load/save INI-like config.
@@ -71,11 +78,10 @@ This document explains how the code is organized, what each file does, and how p
 - Preserves symlinks by re-creating them.
 - Skips hidden files when backing up (you can change this behavior in code).
 
-### bckp-cli/main.swift
-- ArgumentParser-based CLI with local and Azure subcommands.
-- Local: `init-repo`, `backup`, `restore`, `list`, `prune`.
-- Azure: `init-azure`, `backup-azure`, `list-azure`, `restore-azure`, `prune-azure`.
-- Many flags are optional when defaults exist in config (e.g., SAS).
+### bckp-app (SwiftUI)
+- GUI wrapping BackupCore.
+- Sidebar: repo chooser/init, sources, configuration editor (include/exclude, concurrency, SAS), Cloud actions.
+- Repositories panel: searchable/sortable view of repositories.json with live auto-refresh, “Open JSON”, and “Copy key”.
 
 ### bckp-app (SwiftUI)
 - GUI wrapping BackupCore.

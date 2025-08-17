@@ -13,7 +13,7 @@ struct Bckp: ParsableCommand {
         commandName: "bckp",
         abstract: "Simple macOS backup tool",
         version: "0.1.0",
-        subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self],
+    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self],
         defaultSubcommand: nil
     )
 }
@@ -31,6 +31,7 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             try manager.initRepo(at: repoURL)
+            RepositoriesConfigStore.shared.recordRepoUsedLocal(repoURL: repoURL)
             print("Initialized repository at \(repoURL.path)")
         }
     }
@@ -68,6 +69,7 @@ extension Bckp {
                 let opts = BackupOptions(include: include.isEmpty ? cfg.include : include,
                                          exclude: exclude.isEmpty ? cfg.exclude : exclude,
                                          concurrency: concurrency ?? cfg.concurrency)
+            RepositoriesConfigStore.shared.updateConfiguredSourcesLocal(repoURL: repoURL, sources: sources)
             let snap = try manager.backup(sources: sources, to: repoURL, options: opts, progress: progress ? { p in
                 let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
                 let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
@@ -75,6 +77,7 @@ extension Bckp {
                 let cur = p.currentPath ?? ""
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
+            RepositoriesConfigStore.shared.recordBackupLocal(repoURL: repoURL, sourcePaths: sources)
             print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
@@ -97,6 +100,7 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             try manager.restore(snapshotId: id, from: repoURL, to: URL(fileURLWithPath: destination))
+            RepositoriesConfigStore.shared.recordRepoUsedLocal(repoURL: repoURL)
             print("Restored snapshot \(id) to \(destination)")
         }
     }
@@ -164,6 +168,7 @@ extension Bckp {
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
             try manager.initAzureRepo(containerSASURL: sasURL)
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
             print("Initialized Azure repo at container SAS")
         }
     }
@@ -200,6 +205,7 @@ extension Bckp {
                                          concurrency: concurrency ?? cfg.concurrency)
                 let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
                 guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
+                RepositoriesConfigStore.shared.updateConfiguredSourcesAzure(containerSASURL: sasURL, sources: sources)
                 let snap = try manager.backupToAzure(sources: sources, containerSASURL: sasURL, options: opts, progress: progress ? { p in
                 let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
                 let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
@@ -207,6 +213,7 @@ extension Bckp {
                 let cur = p.currentPath ?? ""
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
+            RepositoriesConfigStore.shared.recordBackupAzure(containerSASURL: sasURL, sourcePaths: sources)
             print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
@@ -254,6 +261,7 @@ extension Bckp {
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
             try manager.restoreFromAzure(snapshotId: id, containerSASURL: sasURL, to: URL(fileURLWithPath: destination), concurrency: concurrency ?? cfg.concurrency)
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
             print("Restored cloud snapshot \(id) to \(destination)")
         }
     }
@@ -279,6 +287,42 @@ extension Bckp {
             let result = try manager.pruneInAzure(containerSASURL: sasURL, policy: policy)
             print("Pruned (cloud). Deleted: \(result.deleted.count) | Kept: \(result.kept.count)")
             if !result.deleted.isEmpty { print("Deleted IDs: \(result.deleted.joined(separator: ", "))") }
+        }
+    }
+}
+
+// MARK: - Inspect repositories.json
+extension Bckp {
+    struct Repos: ParsableCommand {
+        static var configuration = CommandConfiguration(abstract: "Inspect tracked repositories usage (repositories.json). Columns: KEY<TAB>LastUsedISO8601<TAB>SourcePath<TAB>LastBackupISO8601")
+
+        @Flag(name: .long, help: "Output as pretty JSON instead of tab-separated rows")
+        var json: Bool = false
+
+        func run() throws {
+            let cfg = RepositoriesConfigStore.shared.config
+            if json {
+                let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]; enc.dateEncodingStrategy = .iso8601
+                let data = try enc.encode(cfg)
+                if let s = String(data: data, encoding: .utf8) { print(s) }
+                return
+            }
+            if cfg.repositories.isEmpty {
+                print("No repositories tracked yet")
+                return
+            }
+            let dateFmt = ISO8601DateFormatter()
+            for (key, info) in cfg.repositories.sorted(by: { $0.key < $1.key }) {
+                let lastUsed = info.lastUsedAt.map { dateFmt.string(from: $0) } ?? ""
+                if info.sources.isEmpty {
+                    print("\(key)\t\(lastUsed)\t\t")
+                } else {
+                    for s in info.sources.sorted(by: { $0.path < $1.path }) {
+                        let lb = s.lastBackupAt.map { dateFmt.string(from: $0) } ?? ""
+                        print("\(key)\t\(lastUsed)\t\(s.path)\t\(lb)")
+                    }
+                }
+            }
         }
     }
 }

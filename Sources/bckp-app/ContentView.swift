@@ -31,9 +31,17 @@ final class AppModel: ObservableObject {
 
     private let manager = BackupManager()
 
+    // repositories.json surfaced data
+    @Published var repoUsage: RepositoryInfo? = nil
+    @Published var cloudRepoUsage: RepositoryInfo? = nil
+
     /// Create the repo if it doesn't exist (idempotent).
     func ensureRepo() {
         do { try manager.initRepo(at: URL(fileURLWithPath: repoPath)) } catch { }
+    // Record usage and refresh repositories.json view
+    let url = URL(fileURLWithPath: repoPath)
+    RepositoriesConfigStore.shared.recordRepoUsedLocal(repoURL: url)
+    refreshRepoUsage()
     }
 
     /// Pull a list of snapshots from the repo.
@@ -56,6 +64,8 @@ final class AppModel: ObservableObject {
         do {
             let items = try manager.listSnapshotsInAzure(containerSASURL: sasURL)
             DispatchQueue.main.async { self.cloudSnapshots = items.reversed() }
+            // Also refresh repositories.json view for cloud
+            refreshCloudRepoUsage()
         } catch {
             append("[Cloud] List failed: \(error.localizedDescription)")
         }
@@ -90,6 +100,9 @@ final class AppModel: ObservableObject {
                     self.append("Backup completed.")
                     self.isBusy = false
                     self.refreshSnapshots()
+                    // Record backup into repositories.json and refresh view
+                    RepositoriesConfigStore.shared.recordBackupLocal(repoURL: URL(fileURLWithPath: self.repoPath), sourcePaths: srcURLs)
+                    self.refreshRepoUsage()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -110,6 +123,8 @@ final class AppModel: ObservableObject {
         do {
             try manager.initAzureRepo(containerSASURL: sasURL)
             append("[Cloud] Repo initialized")
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
+            refreshCloudRepoUsage()
         } catch {
             append("[Cloud] Init failed: \(error.localizedDescription)")
         }
@@ -150,6 +165,9 @@ final class AppModel: ObservableObject {
                     self.append("[Cloud] Backup completed.")
                     self.isBusy = false
                     self.refreshCloudSnapshots()
+                    // Record backup into repositories.json and refresh view
+                    RepositoriesConfigStore.shared.recordBackupAzure(containerSASURL: sasURL, sourcePaths: srcURLs)
+                    self.refreshCloudRepoUsage()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -180,6 +198,8 @@ final class AppModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.append("[Cloud] Restore completed.")
                     self.isBusy = false
+                    RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
+                    self.refreshCloudRepoUsage()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -218,9 +238,29 @@ final class AppModel: ObservableObject {
         do {
             try AppConfigIO.save(cfg, to: AppConfig.defaultRepoConfigURL)
             append("Saved config to \(AppConfig.defaultRepoConfigURL.path)")
+            // Refresh usage views if identifiers changed
+            refreshRepoUsage()
+            refreshCloudRepoUsage()
         } catch {
             append("Save config failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Repositories.json accessors
+    func refreshRepoUsage() {
+        let key = RepositoriesConfigStore.keyForLocal(URL(fileURLWithPath: repoPath))
+        let info = RepositoriesConfigStore.shared.config.repositories[key]
+        DispatchQueue.main.async { self.repoUsage = info }
+    }
+
+    func refreshCloudRepoUsage() {
+        guard !azureSASText.isEmpty, let url = URL(string: azureSASText) else {
+            DispatchQueue.main.async { self.cloudRepoUsage = nil }
+            return
+        }
+        let key = RepositoriesConfigStore.keyForAzure(url)
+        let info = RepositoriesConfigStore.shared.config.repositories[key]
+        DispatchQueue.main.async { self.cloudRepoUsage = info }
     }
 }
 
@@ -229,6 +269,7 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var selectedSnapshotID: String?
     @State private var selectedCloudSnapshotID: String?
+    @State private var showRepositoriesPanel = false
 
     var body: some View {
         NavigationSplitView {
@@ -239,7 +280,12 @@ struct ContentView: View {
         .toolbar { toolbarContent }
     .navigationSplitViewStyle(.balanced)
     .frame(minWidth: 900, minHeight: 560)
-    .onAppear { model.loadConfig(); model.ensureRepo(); model.refreshSnapshots(); model.refreshCloudSnapshots() }
+    .onAppear { model.loadConfig(); model.ensureRepo(); model.refreshSnapshots(); model.refreshCloudSnapshots(); model.refreshRepoUsage(); model.refreshCloudRepoUsage() }
+    .onChange(of: model.repoPath) { _ in model.refreshRepoUsage() }
+    .onChange(of: model.azureSASText) { _ in model.refreshCloudRepoUsage() }
+    .sheet(isPresented: $showRepositoriesPanel) {
+        RepositoriesPanel()
+    }
     }
 
     // MARK: Sidebar
@@ -253,6 +299,24 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                     Button("Choose…") { pickFolder(single: true) { model.repoPath = $0 } }
                     Button("Init") { model.ensureRepo(); model.refreshSnapshots() }
+                }
+                if let info = model.repoUsage {
+                    UsageSummaryView(title: "Last used", date: info.lastUsedAt)
+                    if !info.sources.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Source last backups:").font(.caption).foregroundStyle(.secondary)
+                            ForEach(info.sources.sorted(by: { $0.path < $1.path }), id: \.path) { s in
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Image(systemName: "clock").foregroundStyle(.secondary)
+                                    Text(s.path).lineLimit(1).truncationMode(.middle).font(.caption)
+                                    Spacer()
+                                    Text(s.lastBackupAt?.formatted(date: .abbreviated, time: .shortened) ?? "never")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Section("Sources") {
@@ -309,6 +373,24 @@ struct ContentView: View {
                     Button("List Cloud") { model.refreshCloudSnapshots() }
                     Button("Cloud Backup") { model.runCloudBackup() }
                         .disabled(model.isBusy || model.sources.isEmpty)
+                }
+                if let info = model.cloudRepoUsage {
+                    UsageSummaryView(title: "Last used (cloud)", date: info.lastUsedAt)
+                    if !info.sources.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Cloud source last backups:").font(.caption).foregroundStyle(.secondary)
+                            ForEach(info.sources.sorted(by: { $0.path < $1.path }), id: \.path) { s in
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Image(systemName: "clock").foregroundStyle(.secondary)
+                                    Text(s.path).lineLimit(1).truncationMode(.middle).font(.caption)
+                                    Spacer()
+                                    Text(s.lastBackupAt?.formatted(date: .abbreviated, time: .shortened) ?? "never")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Section("Cloud Snapshots") {
@@ -427,6 +509,11 @@ struct ContentView: View {
                 Label("Copy Log", systemImage: "doc.on.doc")
             }
         }
+        ToolbarItem(placement: .automatic) {
+            Button(action: { showRepositoriesPanel = true }) {
+                Label("Repositories", systemImage: "tray.full")
+            }
+        }
     }
 
     // MARK: Helpers
@@ -474,7 +561,6 @@ private struct SourceRow: View {
 /// Render a snapshot row showing ID (monospaced) and file count.
 private struct SnapshotRow: View {
     let item: SnapshotListItem
-    private static func formatBytes(_ v: Int64) -> String { String(v) }
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
@@ -501,7 +587,7 @@ private struct SnapshotRow: View {
             Label("\(item.totalFiles)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
-            Text(Self.formatBytes(item.totalBytes))
+            Text("\(item.totalBytes)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -517,5 +603,24 @@ private extension View {
     @ViewBuilder
     func `if`(_ condition: Bool, transform: (Self) -> some View) -> some View {
         if condition { transform(self) } else { self }
+    }
+}
+
+// MARK: - Small utility view for usage display
+private struct UsageSummaryView: View {
+    let title: String
+    let date: Date?
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(date?.formatted(date: .abbreviated, time: .shortened) ?? "never")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
     }
 }

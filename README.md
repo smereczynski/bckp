@@ -10,12 +10,15 @@ A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates
 - Initialize a repository under `~/Backups/bckp` (configurable)
 - Create snapshot(s) from one or more source directories
 - Restore a snapshot to any destination
-- List snapshots with counts and sizes
+- List snapshots with counts and sizes (sizes shown in bytes)
 - Include/Exclude glob patterns (relative to each source)
 - Prune snapshots by keeping the last N and/or last D days
 - Concurrency control and progress reporting during backup
 - .bckpignore support per source folder (with !reinclude lines)
 - Cloud repository (optional): Azure Blob Storage via SAS URL
+- Repository usage tracking: persists last-used per repository and last-backup per source path
+- GUI Repositories panel: browse repositories.json with filter, sort, live auto-refresh, and “Open JSON”
+- CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json)
 
 Repository layout:
 ```
@@ -54,6 +57,11 @@ The app lets you:
 - Add sources, run backups with progress, and view logs
 - Edit configuration (include/exclude, concurrency, Azure SAS)
 - Run Cloud actions (Init, List, Cloud Backup, Cloud Restore)
+- Open the Repositories panel (toolbar) to inspect repositories.json with:
+  - Search filter across repo keys and source paths
+  - Sort by Key, Last used, or Last backup (desc for dates)
+  - Live auto‑refresh when the file changes
+  - “Open JSON” to reveal the file in Finder and “Copy key” per repo
 
 ### Configuration
 The CLI and GUI read defaults from a simple config file. Flags always override config.
@@ -114,6 +122,15 @@ exclude: **/.DS_Store
 ### List snapshots
 ```bash
 swift run bckp list --repo ~/Backups/bckp
+```
+
+### Inspect tracked repositories (repositories.json)
+```bash
+# Tab-separated: KEY<TAB>LastUsedISO8601<TAB>SourcePath<TAB>LastBackupISO8601
+swift run bckp repos
+
+# Or pretty JSON
+swift run bckp repos --json
 ```
 
 ### Restore a snapshot
@@ -181,6 +198,39 @@ swift run bckp prune-azure --keep-last 10  # or --keep-days D
 ```
 
 Azure SAS: use a container-level SAS. For backup: write + list (and create). For restore/list: read (and list). Keep SAS secrets safe.
+
+## Repository usage tracking (repositories.json)
+The tool tracks "which repos you use" and "when each source path was last backed up" to help future UI/automation.
+
+- Location (macOS): `~/Library/Application Support/bckp/repositories.json`
+- Tracked per repository key:
+  - lastUsedAt: ISO8601 date when the repo was last touched by any command
+  - sources[]: array of { path, lastBackupAt } for configured/seen source paths
+- Keys are normalized:
+  - Local repos: standardized absolute path
+  - Azure repos: container URL without SAS query/fragment (scheme/host lowercased by URLComponents)
+- Updated automatically by CLI operations:
+  - local: init-repo, backup, restore, list, prune
+  - azure: init-azure, backup-azure, restore-azure, list-azure, prune-azure
+
+Inspect/visualize:
+- CLI: `swift run bckp repos` (or `--json`) prints tracked entries
+- GUI: Repositories panel lists repos with filter/sort, auto-refresh, and quick actions (Open JSON, Copy key)
+
+Example shape:
+```json
+{
+  "repositories": {
+    "/Users/you/Backups/bckp": {
+      "lastUsedAt": "2025-08-17T12:34:56Z",
+      "sources": [
+        { "path": "/Users/you/Documents", "lastBackupAt": "2025-08-17T12:34:56Z" },
+        { "path": "/Users/you/Pictures", "lastBackupAt": null }
+      ]
+    }
+  }
+}
+```
 
 ## Notes
 - Current version copies files; deduplication/hard-linking can be added later.
