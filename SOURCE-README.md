@@ -41,17 +41,17 @@ This document explains how the code is organized, what each file does, and how p
 - Declares a dependency on `swift-argument-parser` so we can build a nice CLI.
 
 ### BackupCore/Models.swift
-- Contains the small data types we save as JSON, like `Snapshot` and `RepoConfig`.
-- `Codable` makes it easy to serialize/deserialize to/from JSON.
-- `Equatable` allows comparing values in tests.
+│  │  ├─ RepositoriesConfig.swift # Persists repository usage: lastUsedAt per repo, lastBackupAt per source
 
-### BackupCore/Utilities.swift
-- Defines `BackupError` so we can report readable errors.
-- Helpers: `URL.isDirectory`, byte count formatting, JSON helpers, glob matching, `.bckpignore` parsing.
-
+- Sizes in listings are printed as raw bytes (no suffix) to simplify scripting.
+- Updates repositories.json automatically on repo use and after backups.
 ### BackupCore/AzureBlob.swift
-- Minimal SAS-based client (URLSession) supporting Put Block/List, Get, Delete.
-- `BackupManager` extension adds Azure-specific init/backup/list/restore/prune.
+
+### BackupCore/RepositoriesConfig.swift
+- Models: `RepositoriesConfig` { repositories: [String: RepositoryInfo] }, `RepositoryInfo` { lastUsedAt, sources }, `RepoSourceInfo` { path, lastBackupAt }.
+- Store: `RepositoriesConfigStore.shared` reads/writes `~/Library/Application Support/bckp/repositories.json` with ISO8601 dates.
+- Keys normalize local repo paths and strip SAS query/fragment from Azure container URLs.
+- Called from CLI on init/backup/restore/list/prune (local and Azure) to update last-used and per-source last-backup.
 
 ### BackupCore/Config.swift
 - `AppConfig` and `AppConfigIO` load/save INI-like config.
