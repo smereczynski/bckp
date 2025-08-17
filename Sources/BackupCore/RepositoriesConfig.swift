@@ -129,7 +129,7 @@ public final class RepositoriesConfigStore {
                 print("Error writing repositories config to file '\(fileURL.path)': \(error)")
             }
         } catch {
-            print("Error encoding repositories config: \(error)")
+            print("Error encoding repositories config to JSON for file '\(fileURL.path)': \(error)")
         }
     }
 
