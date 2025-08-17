@@ -40,7 +40,7 @@ public final class RepositoriesConfigStore {
                 let data = try Data(contentsOf: self.fileURL)
                 self.config = try JSONDecoder().decode(RepositoriesConfig.self, from: data)
             } catch {
-                print("Warning: repositories.json exists but could not be decoded. This may indicate data corruption. Error: \(error)")
+                print("Warning: repositories.json at '\(self.fileURL.path)' exists but could not be decoded. This may indicate data corruption. Error: \(error)\nSuggested recovery: Back up the corrupted file and recreate it (e.g., delete or move '\(self.fileURL.path)' and let the application generate a new one).")
                 self.config = RepositoriesConfig()
                 self.persist()
             }
