@@ -76,7 +76,7 @@ extension Bckp {
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
             let sizeStr = "\(snap.totalBytes)"
-            print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(sizeStr)")
+            print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
 
