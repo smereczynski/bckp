@@ -110,8 +110,6 @@ public final class RepositoriesConfigStore {
 
     private func upsertSource(into sources: inout [RepoSourceInfo], path: String, update: (inout RepoSourceInfo) -> Void) {
         if let idx = sources.firstIndex(where: { $0.path == path }) {
-            var s = sources[idx]; update(&s); sources[idx] = s
-        } else {
             var s = sources[idx]
             update(&s)
             sources[idx] = s
