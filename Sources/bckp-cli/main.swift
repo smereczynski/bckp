@@ -31,6 +31,7 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             try manager.initRepo(at: repoURL)
+            RepositoriesConfigStore.shared.recordRepoUsedLocal(repoURL: repoURL)
             print("Initialized repository at \(repoURL.path)")
         }
     }
@@ -68,6 +69,7 @@ extension Bckp {
                 let opts = BackupOptions(include: include.isEmpty ? cfg.include : include,
                                          exclude: exclude.isEmpty ? cfg.exclude : exclude,
                                          concurrency: concurrency ?? cfg.concurrency)
+            RepositoriesConfigStore.shared.updateConfiguredSourcesLocal(repoURL: repoURL, sources: sources)
             let snap = try manager.backup(sources: sources, to: repoURL, options: opts, progress: progress ? { p in
                 let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
                 let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
@@ -75,6 +77,7 @@ extension Bckp {
                 let cur = p.currentPath ?? ""
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
+            RepositoriesConfigStore.shared.recordBackupLocal(repoURL: repoURL, sourcePaths: sources)
             print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
@@ -97,6 +100,7 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             try manager.restore(snapshotId: id, from: repoURL, to: URL(fileURLWithPath: destination))
+            RepositoriesConfigStore.shared.recordRepoUsedLocal(repoURL: repoURL)
             print("Restored snapshot \(id) to \(destination)")
         }
     }
@@ -164,6 +168,7 @@ extension Bckp {
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
             try manager.initAzureRepo(containerSASURL: sasURL)
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
             print("Initialized Azure repo at container SAS")
         }
     }
@@ -200,6 +205,7 @@ extension Bckp {
                                          concurrency: concurrency ?? cfg.concurrency)
                 let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
                 guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
+                RepositoriesConfigStore.shared.updateConfiguredSourcesAzure(containerSASURL: sasURL, sources: sources)
                 let snap = try manager.backupToAzure(sources: sources, containerSASURL: sasURL, options: opts, progress: progress ? { p in
                 let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
                 let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
@@ -207,6 +213,7 @@ extension Bckp {
                 let cur = p.currentPath ?? ""
                 print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
             } : nil)
+            RepositoriesConfigStore.shared.recordBackupAzure(containerSASURL: sasURL, sourcePaths: sources)
             print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
         }
     }
@@ -254,6 +261,7 @@ extension Bckp {
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
             try manager.restoreFromAzure(snapshotId: id, containerSASURL: sasURL, to: URL(fileURLWithPath: destination), concurrency: concurrency ?? cfg.concurrency)
+            RepositoriesConfigStore.shared.recordRepoUsedAzure(containerSASURL: sasURL)
             print("Restored cloud snapshot \(id) to \(destination)")
         }
     }
