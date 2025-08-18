@@ -19,6 +19,8 @@ A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates
 - Repository usage tracking: persists last-used per repository and last-backup per source path
 - GUI Repositories panel: browse repositories.json with filter, sort, live auto-refresh, and “Open JSON”
 - CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json)
+- External drives aware: on macOS, local repo keys include the external volume UUID when available, for stability across re-mounts
+- GUI external-drive picker (macOS): select an external volume, set a subpath, show the volume UUID and derived repositories.json key, and copy the key
 
 Repository layout:
 ```
@@ -54,6 +56,7 @@ swift run bckp-app
 ```
 The app lets you:
 - Choose and initialize a local repository
+- Use an external-drive picker (macOS) to choose a mounted external/removable volume, enter a subpath (e.g., Backups/bckp), and set the repo path accordingly. When the repo resides on an external volume, the app shows the volume UUID and the derived repositories.json key and offers a “Copy Repo Key” action.
 - Add sources, run backups with progress, and view logs
 - Edit configuration (include/exclude, concurrency, Azure SAS)
 - Run Cloud actions (Init, List, Cloud Backup, Cloud Restore)
@@ -147,6 +150,32 @@ swift run bckp prune --repo ~/Backups/bckp --keep-last 5
 swift run bckp prune --repo ~/Backups/bckp --keep-days 30
 ```
 
+### External drives (macOS)
+
+- List external/removable drives and their UUIDs:
+```bash
+swift run bckp drives
+```
+
+- Pretty JSON output:
+```bash
+swift run bckp drives --json
+```
+
+- Initialize a repo on a specific external volume by UUID (default subpath: Backups/bckp):
+```bash
+swift run bckp init-repo --external-uuid <VOLUME-UUID>
+```
+
+- Customize the subpath under the volume mount point:
+```bash
+swift run bckp init-repo --external-uuid <VOLUME-UUID> --external-subpath "Backups/bckp-personal"
+```
+
+Notes:
+- On macOS, repositories.json uses a stable key for external volumes: `ext://volumeUUID=<UUID><standardizedPath>`. This keeps entries stable across volume renames or mount-point changes.
+- The GUI surfaces the external volume UUID and the derived repo key and lets you copy the key for troubleshooting.
+
 ## Release (build a distributable binary)
 
 ### Debug (fast, default)
@@ -207,7 +236,7 @@ The tool tracks "which repos you use" and "when each source path was last backed
   - lastUsedAt: ISO8601 date when the repo was last touched by any command
   - sources[]: array of { path, lastBackupAt } for configured/seen source paths
 - Keys are normalized:
-  - Local repos: standardized absolute path
+  - Local repos (macOS): if the repo is on an external/removable volume and a stable volume UUID is available, the key becomes `ext://volumeUUID=<UUID><standardizedPath>`; otherwise it’s the standardized absolute path.
   - Azure repos: container URL without SAS query/fragment (scheme/host lowercased by URLComponents)
 - Updated automatically by CLI operations:
   - local: init-repo, backup, restore, list, prune
@@ -221,7 +250,7 @@ Example shape:
 ```json
 {
   "repositories": {
-    "/Users/you/Backups/bckp": {
+  "ext://volumeUUID=123E4567-E89B-12D3-A456-426614174000/Volumes/MyDrive/Backups/bckp": {
       "lastUsedAt": "2025-08-17T12:34:56Z",
       "sources": [
         { "path": "/Users/you/Documents", "lastBackupAt": "2025-08-17T12:34:56Z" },
@@ -231,6 +260,34 @@ Example shape:
   }
 }
 ```
+
+Compatibility notes:
+- If the volume UUID is not exposed by the system, keys remain path-only as before.
+- Moving a local repo between disks can change its key; the GUI shows keys and lets you copy them. This only affects the repositories.json index, not your snapshots.
+
+## Optional CLI integration tests
+
+There’s an opt-in macOS-only CLI integration test that verifies the `drives --json` output contains the selected external volume UUID.
+
+Requirements:
+- At least one external/removable volume with a readable volume UUID must be mounted, otherwise the test is skipped.
+- Full Xcode SDKs installed (for XCTest), same as other tests.
+
+How to run:
+```zsh
+# Build first so the CLI binary exists
+swift build
+
+# Run the full test suite including the CLI test
+BCKP_RUN_CLI_TESTS=1 swift test
+
+# Or run just the CLI test suite
+BCKP_RUN_CLI_TESTS=1 swift test --filter CLIDrivesIntegrationTests
+```
+
+Implementation details:
+- The test executes the already-built `bckp` binary under `.build/.../bckp` directly (not `swift run`) to avoid SwiftPM re-entrancy hangs during `swift test`.
+- A 20-second timeout aborts the process if it stalls and prints captured stdout/stderr for diagnosis.
 
 ## Architecture
 

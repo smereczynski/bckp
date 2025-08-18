@@ -180,7 +180,14 @@ public final class RepositoriesConfigStore {
 
     /// Normalized key for a local repository: standardized absolute path.
     public static func keyForLocal(_ repoURL: URL) -> String {
-        repoURL.standardizedFileURL.path
+        #if os(macOS)
+        // If the repo lives on an external volume and we can read a stable volume UUID,
+        // incorporate it to make the key robust across path re-mounts or drive letter/name changes.
+        if let id = identifyDisk(forPath: repoURL), id.isExternal, let uuid = id.volumeUUID {
+            return "ext://volumeUUID=\(uuid)\(repoURL.standardizedFileURL.path)"
+        }
+        #endif
+        return repoURL.standardizedFileURL.path
     }
 
     /// Normalized key for an Azure container: URL without query/fragment (no SAS).

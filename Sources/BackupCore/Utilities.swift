@@ -58,6 +58,81 @@ struct JSON {
     }()
 }
 
+// MARK: - Disk Identification (macOS)
+#if os(macOS)
+public struct DiskIdentity: Codable, Equatable {
+    // e.g., disk2s1 (intentionally not resolved in this lightweight impl)
+    public let deviceBSDName: String?
+    // Stable volume UUID (if the system exposes it). Used to construct stable repo keys for external volumes.
+    public let volumeUUID: String?         // UUID string of the volume
+    // Mounted volume URL (mount point)
+    public let volumeURL: URL
+    public let isExternal: Bool
+}
+
+/// Resolve the mounted volume URL that contains the given path.
+private func volumeURL(containing path: URL) -> URL? {
+    let fm = FileManager.default
+    guard let volumes = fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeURLKey], options: []) else { return nil }
+    let std = path.standardizedFileURL
+    // Pick the longest matching volume mount point prefix
+    let matches = volumes.filter { std.path.hasPrefix($0.path) }
+    return matches.sorted { $0.path.count > $1.path.count }.first
+}
+
+/// Returns true if the volume at URL is external (removable or external drive).
+/// Heuristics: removable flag OR mounted under /Volumes/.
+private func isExternalVolume(_ vol: URL) -> Bool {
+    let vals = try? vol.resourceValues(forKeys: [.volumeIsRemovableKey, .volumeURLKey, .volumeUUIDStringKey])
+    if let removable = vals?.volumeIsRemovable, removable { return true }
+    // Heuristic: external volumes are typically mounted under /Volumes/<Name>
+    if vol.path.hasPrefix("/Volumes/") { return true }
+    return false
+}
+
+/// Load the Volume UUID using URL resource values when possible.
+/// If not available, returns nil and callers fall back to path-based keys.
+private func volumeUUIDString(_ vol: URL) -> String? {
+    if let vals = try? vol.resourceValues(forKeys: [.volumeUUIDStringKey]), let uuid = vals.volumeUUIDString {
+        return uuid
+    }
+    return nil
+}
+
+/// Resolve the BSD device name for a mounted volume using IOKit.
+/// Not implemented in this version; left as a placeholder for future enrichment.
+private func bsdNameForVolume(_ vol: URL) -> String? { nil }
+
+/// Identify the disk containing the provided path. Returns volume UUID, mount URL and whether it's external.
+public func identifyDisk(forPath path: URL) -> DiskIdentity? {
+    guard let vol = volumeURL(containing: path) else { return nil }
+    let external = isExternalVolume(vol)
+    let uuid = volumeUUIDString(vol)
+    let bsd = bsdNameForVolume(vol)
+    return DiskIdentity(deviceBSDName: bsd, volumeUUID: uuid, volumeURL: vol, isExternal: external)
+}
+
+/// Convenience: true if the given path resides on an external/removable volume.
+public func pathIsOnExternalVolume(_ path: URL) -> Bool {
+    guard let vol = volumeURL(containing: path) else { return false }
+    return isExternalVolume(vol)
+}
+
+/// List identities of all currently mounted external volumes.
+/// Used by the CLI (drives) and the GUI external-drive picker on macOS.
+public func listExternalDiskIdentities() -> [DiskIdentity] {
+    let fm = FileManager.default
+    guard let volumes = fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeUUIDStringKey, .volumeIsRemovableKey], options: []) else { return [] }
+    return volumes.compactMap { vol in
+        let ext = isExternalVolume(vol)
+        guard ext else { return nil }
+        let uuid = volumeUUIDString(vol)
+        let bsd = bsdNameForVolume(vol)
+        return DiskIdentity(deviceBSDName: bsd, volumeUUID: uuid, volumeURL: vol, isExternal: true)
+    }
+}
+#endif
+
 // MARK: - Glob Match
 // A tiny glob matcher supporting '*', '**' across path components.
 // For simplicity we translate to a regular expression and test full-string matches.
