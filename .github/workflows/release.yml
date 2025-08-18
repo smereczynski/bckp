@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache SPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+
+      - name: Derive version
+        id: version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "BCKP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Derived version: $version"
+
+      - name: Inject version into Sources/BackupCore/Version.swift
+        shell: bash
+        run: |
+          cat > Sources/BackupCore/Version.swift <<SWIFT
+          import Foundation
+          public enum BckpVersion {
+              public static let string: String = "${{ steps.version.outputs.version }}"
+          }
+          SWIFT
+          echo "Wrote Version.swift with version ${{ steps.version.outputs.version }}"
+
+      - name: Build (release)
+        shell: bash
+        run: |
+          swift build -c release
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          # Copy binaries
+          cp .build/release/bckp "dist/bckp-${VERSION}-macos"
+          cp .build/release/bckp-app "dist/bckp-app-${VERSION}-macos"
+          # Checksums
+          (cd dist && shasum -a 256 * > SHA256SUMS)
+          # Zip them
+          (cd dist && zip -9 "bckp-${VERSION}-macos.zip" "bckp-${VERSION}-macos")
+          (cd dist && zip -9 "bckp-app-${VERSION}-macos.zip" "bckp-app-${VERSION}-macos")
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          files: |
+            dist/bckp-${{ steps.version.outputs.version }}-macos.zip
+            dist/bckp-app-${{ steps.version.outputs.version }}-macos.zip
+            dist/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

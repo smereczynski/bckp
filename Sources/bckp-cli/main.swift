@@ -12,8 +12,8 @@ struct Bckp: ParsableCommand {
     static var configuration = CommandConfiguration(
         commandName: "bckp",
         abstract: "Simple macOS backup tool",
-        version: "0.1.0",
-    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self, Logs.self],
+        version: BckpVersion.string,
+        subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self, Logs.self],
         defaultSubcommand: nil
     )
 }
