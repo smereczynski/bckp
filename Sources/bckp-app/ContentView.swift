@@ -271,6 +271,8 @@ struct ContentView: View {
     @State private var selectedCloudSnapshotID: String?
     @State private var showRepositoriesPanel = false
     @State private var showLogsPanel = false
+    @State private var showExternalPicker = false
+    @State private var externalSubpath: String = "bckp"
 
     var body: some View {
         NavigationSplitView {
@@ -290,6 +292,17 @@ struct ContentView: View {
     .sheet(isPresented: $showLogsPanel) {
         LogsPanel()
     }
+    // External drive picker sheet
+    .sheet(isPresented: $showExternalPicker) {
+        ExternalDrivePickerView(initialSubpath: externalSubpath) { uuid, mountPath, subpath in
+            var base = URL(fileURLWithPath: mountPath)
+            if !subpath.isEmpty { base.appendPathComponent(subpath, isDirectory: true) }
+            model.repoPath = base.path
+            showExternalPicker = false
+        } onCancel: {
+            showExternalPicker = false
+        }
+    }
     }
 
     // MARK: Sidebar
@@ -302,8 +315,48 @@ struct ContentView: View {
                     TextField("Repo Path", text: $model.repoPath)
                         .textFieldStyle(.roundedBorder)
                     Button("Choose…") { pickFolder(single: true) { model.repoPath = $0 } }
+                    #if os(macOS)
+                    Button("Use External…") {
+                        // Pre-fill subpath from current repoPath, defaulting to "bckp"
+                        externalSubpath = URL(fileURLWithPath: model.repoPath).lastPathComponent.isEmpty ? "bckp" : URL(fileURLWithPath: model.repoPath).lastPathComponent
+                        showExternalPicker = true
+                    }
+                    #endif
+                    Button("Reveal") {
+                        let url = URL(fileURLWithPath: model.repoPath)
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
                     Button("Init") { model.ensureRepo(); model.refreshSnapshots() }
                 }
+                #if os(macOS)
+                // If current repo is on an external volume, surface the UUID and the derived repositories key
+                if let disk = identifyDisk(forPath: URL(fileURLWithPath: model.repoPath)), disk.isExternal {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bolt.horizontal.circle")
+                                .foregroundStyle(.secondary)
+                            Text("External volume UUID: \(disk.volumeUUID ?? "unknown")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                let key = RepositoriesConfigStore.keyForLocal(URL(fileURLWithPath: model.repoPath))
+                                copyToClipboard(key)
+                            } label: {
+                                Label("Copy Repo Key", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        // Show the derived repositories.json key for transparency
+                        let key = RepositoriesConfigStore.keyForLocal(URL(fileURLWithPath: model.repoPath))
+                        Text(key)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                #endif
                 if let info = model.repoUsage {
                     UsageSummaryView(title: "Last used", date: info.lastUsedAt)
                     if !info.sources.isEmpty {
@@ -632,4 +685,101 @@ private struct UsageSummaryView: View {
                 .foregroundStyle(.secondary)
         }
     }
+}
+
+// MARK: - External Drive Picker
+private struct ExternalDrivePickerView: View {
+    struct Drive: Identifiable, Hashable {
+        let id = UUID()
+        let name: String
+        let uuid: String?
+        let mountPath: String
+    }
+
+    @State private var drives: [Drive] = []
+    @State private var selected: Drive? = nil
+    @State private var subpath: String
+
+    let onSelect: (_ uuid: String?, _ mountPath: String, _ subpath: String) -> Void
+    let onCancel: () -> Void
+
+    init(initialSubpath: String, onSelect: @escaping (_ uuid: String?, _ mountPath: String, _ subpath: String) -> Void, onCancel: @escaping () -> Void) {
+        _subpath = State(initialValue: initialSubpath)
+        self.onSelect = onSelect
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Select External Drive")
+                .font(.title3.weight(.semibold))
+            if drives.isEmpty {
+                Text("No external drives detected.")
+                    .foregroundStyle(.secondary)
+            } else {
+                List(selection: $selected) {
+                    ForEach(drives) { d in
+                        HStack(spacing: 8) {
+                            Image(systemName: "externaldrive")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(d.name)
+                                Text("UUID: \(d.uuid ?? "unknown")")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(d.mountPath)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { selected = d }
+                    }
+                }
+                .frame(minHeight: 200)
+                HStack(spacing: 8) {
+                    Text("Subpath")
+                        .foregroundStyle(.secondary)
+                    TextField("bckp", text: $subpath)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { onCancel() }
+                Button("Use") {
+                    if let sel = selected {
+                        onSelect(sel.uuid, sel.mountPath, subpath)
+                    }
+                }
+                .disabled(selected == nil)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 520, minHeight: 340)
+        .onAppear(perform: loadDrives)
+    }
+
+    private func loadDrives() {
+        #if os(macOS)
+        let items = listExternalDiskIdentities()
+        self.drives = items.map { ident in
+            let name = ident.volumeURL.lastPathComponent
+            return Drive(name: name.isEmpty ? ident.volumeURL.path : name,
+                         uuid: ident.volumeUUID,
+                         mountPath: ident.volumeURL.path)
+        }
+        if let first = drives.first { selected = first }
+        #else
+        self.drives = []
+        #endif
+    }
+}
+
+// MARK: - Small helpers
+private func copyToClipboard(_ text: String) {
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    pb.setString(text, forType: .string)
 }
