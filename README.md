@@ -234,7 +234,7 @@ Example shape:
 
 ## Architecture
 
-This section documents how bckp is structured across modules, the core data model, and the main execution flows. It is a living guide for contributors and can be used to generate a dependency diagram.
+This section documents how bckp is structured across modules, the core data model, and the main execution flows. It is a living guide for contributors and includes a dependency diagram.
 
 ### High‑level overview
 
