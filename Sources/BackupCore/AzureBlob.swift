@@ -273,7 +273,8 @@ public enum AzureError: Error, LocalizedError {
 public extension BackupManager {
     /// Initialize a cloud repo by writing a config.json at the container root.
     func initAzureRepo(containerSASURL: URL) throws {
-        let client = AzureBlobClient(containerSASURL: containerSASURL)
+    Logger.shared.info("initAzureRepo", subsystem: "core.azure")
+    let client = AzureBlobClient(containerSASURL: containerSASURL)
     // If already exists, do nothing (idempotent)
         let exists = (try? client.exists(blobPath: "config.json")) ?? false
     if exists { return }
@@ -373,8 +374,8 @@ public extension BackupManager {
                 }
             }
         }
-        queue.waitUntilAllOperationsAreFinished()
-        if let err = firstError { throw err }
+    queue.waitUntilAllOperationsAreFinished()
+    if let err = firstError { Logger.shared.error("azure backup failed: \(err)", subsystem: "core.azure"); throw err }
 
         // Write symlinks.json (if any) and manifest.json
         if !symlinks.isEmpty {
@@ -390,7 +391,8 @@ public extension BackupManager {
     try manifestData.write(to: tmpManifest, options: Data.WritingOptions.atomic)
         try client.uploadFile(localURL: tmpManifest, toBlobPath: basePrefix + "/manifest.json")
 
-        return snapshot
+    Logger.shared.info("azure backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.azure")
+    return snapshot
     }
 
     func listSnapshotsInAzure(containerSASURL: URL) throws -> [SnapshotListItem] {
@@ -424,7 +426,7 @@ public extension BackupManager {
         let client = AzureBlobClient(containerSASURL: containerSASURL)
         // Check manifest exists
         let exists = (try? client.exists(blobPath: "snapshots/\(snapshotId)/manifest.json")) ?? false
-        if !exists { throw AzureError.snapshotNotFound(snapshotId) }
+    if !exists { Logger.shared.error("azure restore: manifest not found for id=\(snapshotId)", subsystem: "core.azure"); throw AzureError.snapshotNotFound(snapshotId) }
 
         // Download all blobs under data prefix
         let dataPrefix = "snapshots/\(snapshotId)/data/"
@@ -445,8 +447,8 @@ public extension BackupManager {
                 do { try client.download(to: local, blobPath: b) } catch { if firstError == nil { firstError = error } }
             }
         }
-        queue.waitUntilAllOperationsAreFinished()
-        if let err = firstError { throw err }
+    queue.waitUntilAllOperationsAreFinished()
+    if let err = firstError { Logger.shared.error("azure restore failed: \(err)", subsystem: "core.azure"); throw err }
 
         // Recreate symlinks if symlinks.json exists
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-symlinks-\(snapshotId).json")
@@ -464,6 +466,7 @@ public extension BackupManager {
                 }
             }
         }
+        Logger.shared.info("azure restore finished id=\(snapshotId) to=\(destination.path)", subsystem: "core.azure")
     }
 
     func pruneInAzure(containerSASURL: URL, policy: PrunePolicy) throws -> PruneResult {
@@ -489,6 +492,7 @@ public extension BackupManager {
             for b in list.blobs { try? client.delete(blobPath: b) }
             deleted.append(it.id)
         }
-        return PruneResult(deleted: deleted, kept: kept)
+    Logger.shared.info("azure prune finished deleted=\(deleted.count) kept=\(kept.count)", subsystem: "core.azure")
+    return PruneResult(deleted: deleted, kept: kept)
     }
 }

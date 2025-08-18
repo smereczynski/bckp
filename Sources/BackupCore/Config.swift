@@ -18,13 +18,17 @@ public struct AppConfig: Equatable {
     public var exclude: [String] = []
     public var concurrency: Int?
     public var azureSAS: String?
+    // Logging
+    // If true, enables debug-level logging. Defaults to false when omitted.
+    public var loggingDebug: Bool?
 
-    public init(repoPath: String? = nil, include: [String] = [], exclude: [String] = [], concurrency: Int? = nil, azureSAS: String? = nil) {
+    public init(repoPath: String? = nil, include: [String] = [], exclude: [String] = [], concurrency: Int? = nil, azureSAS: String? = nil, loggingDebug: Bool? = nil) {
         self.repoPath = repoPath
         self.include = include
         self.exclude = exclude
         self.concurrency = concurrency
         self.azureSAS = azureSAS
+        self.loggingDebug = loggingDebug
     }
 
     // Default config file locations
@@ -68,6 +72,10 @@ public enum AppConfigIO {
         if let exc = table["backup"]?["exclude"], !exc.isEmpty { cfg.exclude = exc.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
         if let conc = table["backup"]?["concurrency"], let n = Int(conc) { cfg.concurrency = n }
         if let sas = table["azure"]?["sas"], !sas.isEmpty { cfg.azureSAS = sas }
+        if let dbg = table["logging"]?["debug"] {
+            let v = dbg.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            cfg.loggingDebug = (v == "1" || v == "true" || v == "yes" || v == "on")
+        }
         return cfg
     }
 
@@ -91,6 +99,10 @@ public enum AppConfigIO {
         lines.append("[azure]")
         lines.append("# Azure Blob Storage container SAS URL")
         lines.append("sas = \(cfg.azureSAS ?? "")")
+    lines.append("")
+    lines.append("[logging]")
+    lines.append("# Enable debug-level logging (true/false)")
+    lines.append("debug = \(cfg.loggingDebug == true ? "true" : "false")")
         let text = lines.joined(separator: "\n") + "\n"
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.data(using: .utf8)!.write(to: url, options: Data.WritingOptions.atomic)
