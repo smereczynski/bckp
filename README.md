@@ -380,6 +380,7 @@ Prune:
 - Current version copies files; deduplication/hard-linking can be added later.
 - Symlinks are preserved when possible.
 - Hidden files are skipped during backup; adjust in code if needed.
+- Logging: human-readable NDJSON lines written under `~/Library/Logs/bckp/` by default; adjustable via config `[logging] debug=true`.
 - Some folders require Full Disk Access. Grant your Terminal app Full Disk Access in System Settings > Privacy & Security.
 - Tests may fail with `no such module XCTest` if only Command Line Tools are installed. Install full Xcode and run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
 

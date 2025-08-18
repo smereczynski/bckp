@@ -18,6 +18,7 @@ public final class BackupManager {
     // MARK: Repo
     // Create the repository folders and write a tiny JSON config so we know it's initialized.
     public func initRepo(at repoURL: URL = defaultRepoURL) throws {
+    Logger.shared.info("initRepo at \(repoURL.path)", subsystem: "core.repo")
         if fm.fileExists(atPath: repoURL.path) {
             // If exists but missing config, treat as uninitialized
             let configURL = repoURL.appendingPathComponent("config.json")
@@ -68,6 +69,7 @@ public final class BackupManager {
         }
 
         let snapshotId = Self.makeSnapshotId()
+    Logger.shared.info("backup starting id=\(snapshotId) sources=\(validSources.count)", subsystem: "core.backup", context: ["repo": repoURL.path])
         let snapshotDir = repoURL.appendingPathComponent("snapshots/\(snapshotId)", isDirectory: true)
         let dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
         try fm.createDirectory(at: dataRoot, withIntermediateDirectories: true)
@@ -132,7 +134,7 @@ public final class BackupManager {
 
     // Phase 2: Execute work concurrently with progress reporting.
         let maxConcurrency = max(1, options.concurrency ?? ProcessInfo.processInfo.activeProcessorCount)
-        let queue = OperationQueue()
+    let queue = OperationQueue()
         queue.maxConcurrentOperationCount = maxConcurrency
         queue.qualityOfService = .userInitiated
 
@@ -180,13 +182,14 @@ public final class BackupManager {
                         }
                     }
                 } catch {
+                    Logger.shared.error("copy failed: \(t.relPath) -> \(t.dst.path): \(error)", subsystem: "core.backup")
                     progressSync.sync { if firstError == nil { firstError = error } }
                 }
             }
         }
 
         queue.waitUntilAllOperationsAreFinished()
-        if let err = firstError { throw err }
+    if let err = firstError { Logger.shared.error("backup failed: \(err)", subsystem: "core.backup"); throw err }
 
         let snapshot = Snapshot(
             id: snapshotId,
@@ -202,7 +205,8 @@ public final class BackupManager {
         let data = try JSON.encoder.encode(snapshot)
         try data.write(to: manifestURL, options: [.atomic])
 
-        return snapshot
+    Logger.shared.info("backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.backup")
+    return snapshot
     }
 
     // MARK: Prune
@@ -210,7 +214,7 @@ public final class BackupManager {
     public func prune(in repoURL: URL = defaultRepoURL, policy: PrunePolicy) throws -> PruneResult {
         try ensureRepoInitialized(repoURL)
     let items = try listSnapshots(in: repoURL) // ascending by createdAt
-        if items.isEmpty { return PruneResult(deleted: [], kept: []) }
+    if items.isEmpty { Logger.shared.info("prune: no snapshots", subsystem: "core.prune"); return PruneResult(deleted: [], kept: []) }
 
         let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
         var keep = Set<String>()
@@ -240,6 +244,7 @@ public final class BackupManager {
             }
             deleted.append(it.id)
         }
+        Logger.shared.info("prune finished deleted=\(deleted.count) kept=\(kept.count)", subsystem: "core.prune")
         return PruneResult(deleted: deleted, kept: kept)
     }
 
@@ -256,7 +261,7 @@ public final class BackupManager {
 
     // Copy back contents of dataRoot to destination
         let enumerator = fm.enumerator(at: dataRoot, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey], options: [])
-        while let item = enumerator?.nextObject() as? URL {
+    while let item = enumerator?.nextObject() as? URL {
             let relPath = Self.relativePath(of: item, under: dataRoot)
             let destURL = destination.appendingPathComponent(relPath)
             let rv = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
@@ -268,17 +273,18 @@ public final class BackupManager {
                 if fm.fileExists(atPath: destURL.path) {
                     try fm.removeItem(at: destURL)
                 }
-                try fm.copyItem(at: item, to: destURL)
+        do { try fm.copyItem(at: item, to: destURL) } catch { Logger.shared.error("restore copy failed: \(relPath): \(error)", subsystem: "core.restore"); throw error }
             } else if rv.isSymbolicLink == true {
                 let parent = destURL.deletingLastPathComponent()
                 try fm.createDirectory(at: parent, withIntermediateDirectories: true)
                 if fm.fileExists(atPath: destURL.path) {
                     try fm.removeItem(at: destURL)
                 }
-                let destPath = try fm.destinationOfSymbolicLink(atPath: item.path)
-                try fm.createSymbolicLink(atPath: destURL.path, withDestinationPath: destPath)
+        let destPath = try fm.destinationOfSymbolicLink(atPath: item.path)
+        try fm.createSymbolicLink(atPath: destURL.path, withDestinationPath: destPath)
             }
         }
+    Logger.shared.info("restore finished snapshot=\(snapshotId) to=\(destination.path)", subsystem: "core.restore")
     }
 
     // MARK: List

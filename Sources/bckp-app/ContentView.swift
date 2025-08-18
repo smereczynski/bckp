@@ -270,6 +270,7 @@ struct ContentView: View {
     @State private var selectedSnapshotID: String?
     @State private var selectedCloudSnapshotID: String?
     @State private var showRepositoriesPanel = false
+    @State private var showLogsPanel = false
 
     var body: some View {
         NavigationSplitView {
@@ -285,6 +286,9 @@ struct ContentView: View {
     .onChange(of: model.azureSASText) { _ in model.refreshCloudRepoUsage() }
     .sheet(isPresented: $showRepositoriesPanel) {
         RepositoriesPanel()
+    }
+    .sheet(isPresented: $showLogsPanel) {
+        LogsPanel()
     }
     }
 
@@ -380,7 +384,7 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Cloud source last backups:").font(.caption).foregroundStyle(.secondary)
                             ForEach(info.sources.sorted(by: { $0.path < $1.path }), id: \.path) { s in
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                HStack(alignment: .top, spacing: 6) {
                                     Image(systemName: "clock").foregroundStyle(.secondary)
                                     Text(s.path).lineLimit(1).truncationMode(.middle).font(.caption)
                                     Spacer()
@@ -512,6 +516,11 @@ struct ContentView: View {
         ToolbarItem(placement: .automatic) {
             Button(action: { showRepositoriesPanel = true }) {
                 Label("Repositories", systemImage: "tray.full")
+            }
+        }
+        ToolbarItem(placement: .automatic) {
+            Button(action: { showLogsPanel = true }) {
+                Label("Logs", systemImage: "doc.text.magnifyingglass")
             }
         }
     }

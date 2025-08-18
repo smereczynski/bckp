@@ -13,7 +13,7 @@ struct Bckp: ParsableCommand {
         commandName: "bckp",
         abstract: "Simple macOS backup tool",
         version: "0.1.0",
-    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self],
+    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self, Logs.self],
         defaultSubcommand: nil
     )
 }
@@ -322,6 +322,161 @@ extension Bckp {
                         print("\(key)\t\(lastUsed)\t\(s.path)\t\(lb)")
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Logs viewer (NDJSON)
+extension Bckp {
+    struct Logs: ParsableCommand {
+        static var configuration = CommandConfiguration(abstract: "View bckp logs (NDJSON). Defaults to today's file. Use --list to see available files.")
+
+        @Flag(name: .long, help: "List available log files")
+        var list: Bool = false
+
+        @Option(name: .long, help: "Date (YYYY-MM-DD) of the log file to read; default: today")
+        var date: String?
+
+        @Option(name: .long, help: "Minimum level to show: error|warning|info|debug (default: info)")
+        var level: String?
+
+        @Option(name: .long, parsing: .upToNextOption, help: "Filter by subsystem(s). Provide multiple --subsystem values to include more than one.")
+        var subsystem: [String] = []
+
+        @Option(name: .long, help: "Show only the last N lines before following/exit")
+        var limit: Int?
+
+        @Flag(name: .long, help: "Output raw NDJSON lines instead of formatted text")
+        var json: Bool = false
+
+        @Flag(name: .long, help: "Follow the file and print new lines as they are written (Ctrl-C to stop)")
+        var follow: Bool = false
+
+        func run() throws {
+            let logsDir = Logger.defaultLogsDirectory()
+            if list {
+                let files = (try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey], options: [.skipsHiddenFiles])) ?? []
+                if files.isEmpty {
+                    print("No log files in \(logsDir.path)")
+                    return
+                }
+                for url in files.filter({ $0.pathExtension == "log" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    print(url.lastPathComponent)
+                }
+                return
+            }
+
+            let fileURL = try resolveLogFileURL(logsDir: logsDir)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                throw ValidationError("Log file not found: \(fileURL.lastPathComponent)")
+            }
+
+            let minLevel = parseLevel(level) ?? .info
+            let subsystems = Set(subsystem.map { $0.lowercased() })
+
+            // Print initial content (optionally limited)
+            let (entries, rawLines) = loadEntries(from: fileURL)
+            let pairs: [(LogEntry, String)] = Array(zip(entries, rawLines))
+            var filtered = pairs.filter { (e, _) in
+                let levelOK = e.level <= minLevel
+                let subsystemOK = subsystems.isEmpty || subsystems.contains(e.subsystem.lowercased())
+                return levelOK && subsystemOK
+            }
+            if let limit, limit > 0, filtered.count > limit { filtered = Array(filtered.suffix(limit)) }
+            output(filtered: filtered, asJSON: json)
+
+            guard follow else { return }
+
+            // Follow: keep reading appended data
+            try followFile(url: fileURL, minLevel: minLevel, subsystems: subsystems, asJSON: json)
+        }
+
+        // MARK: - Helpers
+        private func resolveLogFileURL(logsDir: URL) throws -> URL {
+            if let date {
+                // expect yyyy-MM-dd
+                return logsDir.appendingPathComponent("bckp-\(date).log")
+            }
+            let fmt = DateFormatter(); fmt.locale = Locale(identifier: "en_US_POSIX"); fmt.dateFormat = "yyyy-MM-dd"
+            let day = fmt.string(from: Date())
+            return logsDir.appendingPathComponent("bckp-\(day).log")
+        }
+
+        private func parseLevel(_ s: String?) -> LogLevel? {
+            guard let s else { return nil }
+            switch s.lowercased() {
+            case "error": return .error
+            case "warning": return .warning
+            case "info": return .info
+            case "debug": return .debug
+            default: return nil
+            }
+        }
+
+        private func loadEntries(from url: URL) -> ([LogEntry], [String]) {
+            let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+            guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return ([], []) }
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map { String($0) }
+            var entries: [LogEntry] = []
+            var raws: [String] = []
+            for line in lines {
+                if let d = line.data(using: .utf8), let e = try? dec.decode(LogEntry.self, from: d) {
+                    entries.append(e); raws.append(line)
+                }
+            }
+            return (entries, raws)
+        }
+
+    private func output(filtered: [(LogEntry, String)], asJSON: Bool) {
+            if asJSON {
+        for (_, raw) in filtered { print(raw) }
+            } else {
+                let df = ISO8601DateFormatter()
+                for (e, _) in filtered {
+                    var line = "\(df.string(from: e.timestamp))\t\(e.level.rawValue.uppercased())\t\(e.subsystem)\t\(e.message)"
+                    if let ctx = e.context, !ctx.isEmpty {
+                        let extras = ctx.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+                        line.append("\t{\(extras)}")
+                    }
+                    print(line)
+                }
+            }
+        }
+
+        private func followFile(url: URL, minLevel: LogLevel, subsystems: Set<String>, asJSON: Bool) throws {
+            let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+            let handle = try FileHandle(forReadingFrom: url)
+            var offset: UInt64 = try handle.seekToEnd()
+            let df = ISO8601DateFormatter()
+            while true {
+                // Check for new data
+                let end = try handle.seekToEnd()
+                if end > offset {
+                    let length = end - offset
+                    try handle.seek(toOffset: offset)
+                    if let data = try handle.read(upToCount: Int(length)), let text = String(data: data, encoding: .utf8) {
+                        for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map({ String($0) }) {
+                            if let d = rawLine.data(using: .utf8), let e = try? dec.decode(LogEntry.self, from: d) {
+                                let levelOK = e.level <= minLevel
+                                let subsystemOK = subsystems.isEmpty || subsystems.contains(e.subsystem.lowercased())
+                                if levelOK && subsystemOK {
+                                    if asJSON { print(rawLine) }
+                                    else {
+                                        var line = "\(df.string(from: e.timestamp))\t\(e.level.rawValue.uppercased())\t\(e.subsystem)\t\(e.message)"
+                                        if let ctx = e.context, !ctx.isEmpty {
+                                            let extras = ctx.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+                                            line.append("\t{\(extras)}")
+                                        }
+                                        print(line)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    offset = end
+                }
+                Thread.sleep(forTimeInterval: 0.5)
             }
         }
     }
