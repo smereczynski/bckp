@@ -373,7 +373,7 @@ Prune:
 
 ### Testing
 
-- Unit tests cover filtering, local engine flows, repositories.json store (local/Azure keys), and an optional Azure integration test driven by config SAS.
+- Unit tests cover filtering, local engine flows, repositories.json store (local/Azure keys), and an optional Azure integration test driven by a config Shared Access Signature (SAS) token for Azure.
 - Tests set RepositoriesConfigStore.overrideFileURL to avoid touching the real Application Support path.
 
 ## Notes
