@@ -130,3 +130,11 @@ This document explains how the code is organized, what each file does, and how p
 - Check `Models.swift`, `Utilities.swift`, and `Config.swift` to understand the data and helpers.
 - Explore the GUI in `Sources/bckp-app/ContentView.swift` to see how the app ties together.
 - Run `swift run bckp --help` and `swift run bckp-app` to try it.
+
+## Release packaging (macOS)
+- CI builds two executables: `bckp` (CLI) and `bckp-app` (GUI).
+- Artifacts published to Releases:
+  - `bckp-<version>-macos.zip` → contains a single file `bckp` (CLI; run from Terminal)
+  - `bckp-app-<version>-macos.zip` → contains a single file `bckp-app` (GUI; run from Terminal; not a Finder app)
+  - `bckp-app-<version>-macos.app.zip` → contains `bckp-app.app` (Finder-launchable app bundle)
+- The `.app` bundle is a minimal structure created in CI. It is currently unsigned and not notarized; Gatekeeper may require right‑click → Open or removing quarantine attributes for local testing.
