@@ -55,14 +55,61 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          # Copy binaries
-          cp .build/release/bckp "dist/bckp-${VERSION}-macos"
-          cp .build/release/bckp-app "dist/bckp-app-${VERSION}-macos"
-          # Checksums
-          (cd dist && shasum -a 256 * > SHA256SUMS)
-          # Zip them
-          (cd dist && zip -9 "bckp-${VERSION}-macos.zip" "bckp-${VERSION}-macos")
-          (cd dist && zip -9 "bckp-app-${VERSION}-macos.zip" "bckp-app-${VERSION}-macos")
+          # Copy binaries with clean internal names
+          cp .build/release/bckp "dist/bckp"
+          cp .build/release/bckp-app "dist/bckp-app"
+
+          # Zip binaries (archive names include version, internal filenames are clean)
+          (cd dist && zip -9 "bckp-${VERSION}-macos.zip" "bckp")
+          (cd dist && zip -9 "bckp-app-${VERSION}-macos.zip" "bckp-app")
+
+          # Create a minimal macOS .app bundle for the GUI for double-click usage
+          APP_ROOT="dist/bckp-app.app/Contents"
+          mkdir -p "$APP_ROOT/MacOS" "$APP_ROOT/Resources"
+          cat > "$APP_ROOT/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleExecutable</key>
+            <string>bckp-app</string>
+            <key>CFBundleIdentifier</key>
+            <string>io.github.smereczynski.bckp</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>bckp</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>13.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          # Place the GUI binary inside the app bundle
+          cp .build/release/bckp-app "$APP_ROOT/MacOS/bckp-app"
+          chmod +x "$APP_ROOT/MacOS/bckp-app"
+
+          # Zip the .app bundle
+          (cd dist && zip -9 -r "bckp-app-${VERSION}-macos.app.zip" "bckp-app.app")
+
+          # Checksums for the distributables
+          (
+            cd dist
+            shasum -a 256 \
+              "bckp-${VERSION}-macos.zip" \
+              "bckp-app-${VERSION}-macos.zip" \
+              "bckp-app-${VERSION}-macos.app.zip" \
+              > SHA256SUMS
+          )
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -74,6 +121,7 @@ jobs:
           files: |
             dist/bckp-${{ steps.version.outputs.version }}-macos.zip
             dist/bckp-app-${{ steps.version.outputs.version }}-macos.zip
+            dist/bckp-app-${{ steps.version.outputs.version }}-macos.app.zip
             dist/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
