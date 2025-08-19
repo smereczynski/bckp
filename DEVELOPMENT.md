@@ -61,8 +61,9 @@ The project embeds a version string at build time and automates releases via Git
   - Writes `Sources/BackupCore/Version.swift` with that exact string.
   - Builds release binaries via SwiftPM (`bckp`, `bckp-app`).
   - Packages artifacts:
-    - `bckp-<version>-macos.zip`
-    - `bckp-app-<version>-macos.zip`
+    - `bckp-<version>-macos.zip` (CLI binary inside named `bckp`)
+    - `bckp-app-<version>-macos.zip` (GUI binary inside named `bckp-app` for Terminal launch)
+    - `bckp-app-<version>-macos.app.zip` (double‑clickable Finder app bundle `bckp-app.app`)
     - `SHA256SUMS` with checksums for integrity.
   - Publishes a GitHub Release:
     - Title/Tag: `v<version>`
@@ -70,7 +71,9 @@ The project embeds a version string at build time and automates releases via Git
 
 4) Verify the release
 - Download artifacts, verify checksums from `SHA256SUMS`.
-- Run `./bckp --version` to confirm the embedded version matches the tag.
+- CLI: unzip `bckp-<version>-macos.zip`, run `./bckp --version` and confirm the tag.
+- GUI (Terminal): unzip `bckp-app-<version>-macos.zip`, run `./bckp-app` and confirm the app shows the version.
+- GUI (Finder): unzip `bckp-app-<version>-macos.app.zip`, move to Applications, launch. If Gatekeeper warns (unsigned, not notarized yet), right‑click → Open or clear quarantine: `xattr -dr com.apple.quarantine ~/Applications/bckp-app.app`.
 
 ### 4.3 Local builds and version override (optional)
 
@@ -80,9 +83,9 @@ The project embeds a version string at build time and automates releases via Git
 
 ### 4.4 Notes and future improvements
 
-- Current artifacts are SwiftPM executables (CLI + SwiftUI app) without code signing.
+- Artifacts include a raw GUI binary and a minimal `.app` bundle. Code signing and notarization are not yet enabled.
 - Optional follow‑ups:
   - Universal (arm64 + x86_64) macOS binaries.
-  - Code signing and notarization.
+  - Code signing and notarization for `.app` and binaries.
   - Homebrew tap for `bckp` CLI.
   - Changelog automation.

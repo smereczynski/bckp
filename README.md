@@ -66,6 +66,31 @@ The app lets you:
   - Live auto‑refresh when the file changes
   - “Open JSON” to reveal the file in Finder and “Copy key” per repo
 
+## Install from Releases
+
+Prebuilt artifacts are published on each tag in GitHub Releases. You’ll see three macOS downloads:
+
+- bckp-<version>-macos.zip
+  - CLI executable. Unzip and run from Terminal.
+  - Example:
+    - unzip → file named `bckp`
+    - run: `./bckp --help`
+
+- bckp-app-<version>-macos.zip
+  - GUI executable as a raw binary (not a Finder app). Launch from Terminal:
+    - unzip → file named `bckp-app`
+    - run: `./bckp-app`
+  - This is useful for debugging; it’s not a proper `.app` bundle.
+
+- bckp-app-<version>-macos.app.zip
+  - Double‑clickable macOS app bundle for Finder.
+  - Unzip, then move `bckp-app.app` to `/Applications` (or `~/Applications`).
+  - If macOS Gatekeeper blocks it (unsigned/not notarized yet), you can allow it:
+    - Right‑click → Open, then Open; or remove quarantine attributes:
+      - `xattr -dr com.apple.quarantine ~/Applications/bckp-app.app`
+
+Checksums: a `SHA256SUMS` file is attached to the release.
+
 ### Configuration
 The CLI and GUI read defaults from a simple config file. Flags always override config.
 
@@ -176,7 +201,7 @@ Notes:
 - On macOS, repositories.json uses a stable key for external volumes: `ext://volumeUUID=<UUID><standardizedPath>`. This keeps entries stable across volume renames or mount-point changes.
 - The GUI surfaces the external volume UUID and the derived repo key and lets you copy the key for troubleshooting.
 
-## Release (build a distributable binary)
+## Build from source
 
 ### Debug (fast, default)
 ```bash
@@ -190,7 +215,7 @@ swift build -c release
 ls -l .build/release/bckp
 ```
 
-You can copy the built binary to a directory in your PATH (e.g., `~/bin`) or wrap it in a small `.pkg`/`.dmg` later.
+You can copy the built binary to a directory in your PATH (e.g., `~/bin`). Packaging and signing/notarization are tracked as future improvements.
 
 ### Azure (SAS) Cloud Repo
 You can pass `--sas` explicitly, or omit it to use the value from your config.
