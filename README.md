@@ -75,18 +75,24 @@ Prebuilt artifacts are published on each tag in GitHub Releases. You’ll see th
   - Example:
     - unzip → file named `bckp`
     - run: `./bckp --help`
+  - If macOS Gatekeeper blocks it (unsigned/not notarized yet), you can allow it:
+    - Remove quarantine attributes:
+      - `xattr -dr com.apple.quarantine bckp`
 
 - bckp-app-<version>-macos.zip
   - GUI executable as a raw binary (not a Finder app). Launch from Terminal:
     - unzip → file named `bckp-app`
     - run: `./bckp-app`
   - This is useful for debugging; it’s not a proper `.app` bundle.
+  - If macOS Gatekeeper blocks it (unsigned/not notarized yet), you can allow it:
+    - Remove quarantine attributes:
+      - `xattr -dr com.apple.quarantine bckp-app`
 
 - bckp-app-<version>-macos.app.zip
   - Double‑clickable macOS app bundle for Finder.
   - Unzip, then move `bckp-app.app` to `/Applications` (or `~/Applications`).
   - If macOS Gatekeeper blocks it (unsigned/not notarized yet), you can allow it:
-    - Right‑click → Open, then Open; or remove quarantine attributes:
+    - Remove quarantine attributes:
       - `xattr -dr com.apple.quarantine ~/Applications/bckp-app.app`
 
 Checksums: a `SHA256SUMS` file is attached to the release.
