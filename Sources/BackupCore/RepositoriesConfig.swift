@@ -6,12 +6,27 @@ public struct RepositoriesConfig: Codable {
     public init(repositories: [String: RepositoryInfo] = [:]) { self.repositories = repositories }
 }
 
+public enum RepositoryType: String, Codable {
+    case local = "Local"
+    case azure = "Azure"
+}
+
 public struct RepositoryInfo: Codable {
+    // Type of repository. Optional for backward compatibility with older files.
+    public var type: RepositoryType?
     public var lastUsedAt: Date?
     public var sources: [RepoSourceInfo]
-    public init(lastUsedAt: Date? = nil, sources: [RepoSourceInfo] = []) {
+    public init(type: RepositoryType? = nil, lastUsedAt: Date? = nil, sources: [RepoSourceInfo] = []) {
+        self.type = type
         self.lastUsedAt = lastUsedAt
         self.sources = sources
+    }
+    // Backward-compatible decoding: tolerate missing "type"
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.type = try c.decodeIfPresent(RepositoryType.self, forKey: .type)
+        self.lastUsedAt = try c.decodeIfPresent(Date.self, forKey: .lastUsedAt)
+        self.sources = try c.decodeIfPresent([RepoSourceInfo].self, forKey: .sources) ?? []
     }
 }
 
@@ -45,7 +60,12 @@ public final class RepositoriesConfigStore {
     private let ioQueue = DispatchQueue(label: "bckp.repositories.config.io")
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Pretty + stable key order + do not escape forward slashes
+        if #available(macOS 12.0, *) {
+            e.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        } else {
+            e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        }
         e.dateEncodingStrategy = .iso8601
         return e
     }()
@@ -71,7 +91,8 @@ public final class RepositoriesConfigStore {
     public func recordRepoUsedLocal(repoURL: URL, when: Date = Date()) {
         let key = Self.keyForLocal(repoURL)
         update { cfg in
-            var info = cfg.repositories[key] ?? RepositoryInfo()
+            var info = cfg.repositories[key] ?? RepositoryInfo(type: .local)
+            info.type = .local
             info.lastUsedAt = when
             cfg.repositories[key] = info
         }
@@ -80,7 +101,8 @@ public final class RepositoriesConfigStore {
     public func recordRepoUsedAzure(containerSASURL: URL, when: Date = Date()) {
         let key = Self.keyForAzure(containerSASURL)
         update { cfg in
-            var info = cfg.repositories[key] ?? RepositoryInfo()
+            var info = cfg.repositories[key] ?? RepositoryInfo(type: .azure)
+            info.type = .azure
             info.lastUsedAt = when
             cfg.repositories[key] = info
         }
@@ -89,13 +111,14 @@ public final class RepositoriesConfigStore {
     public func updateConfiguredSourcesLocal(repoURL: URL, sources: [URL]) {
         let key = Self.keyForLocal(repoURL)
         update { cfg in
-            var info = cfg.repositories[key] ?? RepositoryInfo()
+            var info = cfg.repositories[key] ?? RepositoryInfo(type: .local)
+            info.type = .local
             var existing = info.sources
             let paths = sources.map { $0.standardizedFileURL.path }
             for p in paths where !existing.contains(where: { $0.path == p }) {
                 existing.append(RepoSourceInfo(path: p, lastBackupAt: nil))
             }
-            info.sources = existing
+            info.sources = Self.dedupSources(existing)
             cfg.repositories[key] = info
         }
     }
@@ -103,13 +126,14 @@ public final class RepositoriesConfigStore {
     public func updateConfiguredSourcesAzure(containerSASURL: URL, sources: [URL]) {
         let key = Self.keyForAzure(containerSASURL)
         update { cfg in
-            var info = cfg.repositories[key] ?? RepositoryInfo()
+            var info = cfg.repositories[key] ?? RepositoryInfo(type: .azure)
+            info.type = .azure
             var existing = info.sources
             let paths = sources.map { $0.standardizedFileURL.path }
             for p in paths where !existing.contains(where: { $0.path == p }) {
                 existing.append(RepoSourceInfo(path: p, lastBackupAt: nil))
             }
-            info.sources = existing
+            info.sources = Self.dedupSources(existing)
             cfg.repositories[key] = info
         }
     }
@@ -117,7 +141,8 @@ public final class RepositoriesConfigStore {
     public func recordBackupLocal(repoURL: URL, sourcePaths: [URL], when: Date = Date()) {
         let key = Self.keyForLocal(repoURL)
         update { cfg in
-            var info = cfg.repositories[key] ?? RepositoryInfo()
+            var info = cfg.repositories[key] ?? RepositoryInfo(type: .local)
+            info.type = .local
             info.lastUsedAt = when
             var map: [String: RepoSourceInfo] = Dictionary(uniqueKeysWithValues: info.sources.map { ($0.path, $0) })
             for url in sourcePaths {
@@ -133,7 +158,8 @@ public final class RepositoriesConfigStore {
     public func recordBackupAzure(containerSASURL: URL, sourcePaths: [URL], when: Date = Date()) {
         let key = Self.keyForAzure(containerSASURL)
         update { cfg in
-            var info = cfg.repositories[key] ?? RepositoryInfo()
+            var info = cfg.repositories[key] ?? RepositoryInfo(type: .azure)
+            info.type = .azure
             info.lastUsedAt = when
             var map: [String: RepoSourceInfo] = Dictionary(uniqueKeysWithValues: info.sources.map { ($0.path, $0) })
             for url in sourcePaths {
@@ -146,11 +172,20 @@ public final class RepositoriesConfigStore {
         }
     }
 
+    /// Remove all repositories and persist an empty configuration.
+    public func clearAll() {
+        update { cfg in
+            cfg.repositories.removeAll()
+        }
+    }
+
     // MARK: - Helpers
     private func update(_ mutate: (inout RepositoriesConfig) -> Void) {
         ioQueue.sync {
             var cfg = self.config
             mutate(&cfg)
+            // Ensure de-duplication of sources across all repositories before persisting
+            cfg = Self.deduplicated(cfg)
             self.config = cfg
             persist()
         }
@@ -196,6 +231,28 @@ public final class RepositoriesConfigStore {
         comps?.query = nil
         comps?.fragment = nil
         return comps?.url?.absoluteString ?? containerSASURL.absoluteString
+    }
+}
+
+// MARK: - Dedup helpers
+private extension RepositoriesConfigStore {
+    static func dedupSources(_ sources: [RepoSourceInfo]) -> [RepoSourceInfo] {
+        var seen: Set<String> = []
+        var out: [RepoSourceInfo] = []
+        for s in sources {
+            if seen.insert(s.path).inserted { out.append(s) }
+        }
+        return out.sorted { $0.path < $1.path }
+    }
+
+    static func deduplicated(_ cfg: RepositoriesConfig) -> RepositoriesConfig {
+        var new = cfg
+        for (k, v) in cfg.repositories {
+            var info = v
+            info.sources = dedupSources(v.sources)
+            new.repositories[k] = info
+        }
+        return new
     }
 }
 

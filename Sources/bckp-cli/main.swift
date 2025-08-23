@@ -165,15 +165,35 @@ extension Bckp {
         @Option(name: .long, help: "Keep snapshots from the last D days")
         var keepDays: Int?
 
+        @Flag(name: .long, help: "Delete ALL snapshots (dangerous). This bypasses safety and removes the newest as well.")
+        var forceAll: Bool = false
+
         func run() throws {
             let manager = BackupManager()
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
-            let policy = PrunePolicy(keepLast: keepLast, keepDays: keepDays)
-            let result = try manager.prune(in: repoURL, policy: policy)
-            print("Pruned. Deleted: \(result.deleted.count) | Kept: \(result.kept.count)")
-            if !result.deleted.isEmpty {
-                print("Deleted IDs: \(result.deleted.joined(separator: ", "))")
+            if forceAll {
+                try manager.ensureRepoInitialized(repoURL)
+                let items = try manager.listSnapshots(in: repoURL)
+                if items.isEmpty { print("Pruned. Deleted: 0 | Kept: 0"); return }
+                let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
+                var deleted: [String] = []
+                for it in items {
+                    let dir = snapsDir.appendingPathComponent(it.id, isDirectory: true)
+                    let img = snapsDir.appendingPathComponent("\(it.id).sparseimage")
+                    if FileManager.default.fileExists(atPath: dir.path) { try? FileManager.default.removeItem(at: dir) }
+                    if FileManager.default.fileExists(atPath: img.path) { try? FileManager.default.removeItem(at: img) }
+                    deleted.append(it.id)
+                }
+                print("Pruned. Deleted: \(deleted.count) | Kept: 0")
+                if !deleted.isEmpty { print("Deleted IDs: \(deleted.joined(separator: ", "))") }
+            } else {
+                let policy = PrunePolicy(keepLast: keepLast, keepDays: keepDays)
+                let result = try manager.prune(in: repoURL, policy: policy)
+                print("Pruned. Deleted: \(result.deleted.count) | Kept: \(result.kept.count)")
+                if !result.deleted.isEmpty {
+                    print("Deleted IDs: \(result.deleted.joined(separator: ", "))")
+                }
             }
         }
     }
@@ -302,15 +322,33 @@ extension Bckp {
         @Option(name: .long, help: "Keep snapshots from the last D days")
         var keepDays: Int?
 
+        @Flag(name: .long, help: "Delete ALL cloud snapshots (dangerous). This bypasses safety and removes the newest as well.")
+        var forceAll: Bool = false
+
         func run() throws {
             let manager = BackupManager()
             let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
             let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
             guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
-            let policy = PrunePolicy(keepLast: keepLast, keepDays: keepDays)
-            let result = try manager.pruneInAzure(containerSASURL: sasURL, policy: policy)
-            print("Pruned (cloud). Deleted: \(result.deleted.count) | Kept: \(result.kept.count)")
-            if !result.deleted.isEmpty { print("Deleted IDs: \(result.deleted.joined(separator: ", "))") }
+            if forceAll {
+                let items = try manager.listSnapshotsInAzure(containerSASURL: sasURL)
+                if items.isEmpty { print("Pruned (cloud). Deleted: 0 | Kept: 0"); return }
+                let client = AzureBlobClient(containerSASURL: sasURL)
+                var deleted: [String] = []
+                for it in items {
+                    let prefix = "snapshots/\(it.id)/"
+                    let list = try client.list(prefix: prefix, delimiter: nil)
+                    for b in list.blobs { try? client.delete(blobPath: b) }
+                    deleted.append(it.id)
+                }
+                print("Pruned (cloud). Deleted: \(deleted.count) | Kept: 0")
+                if !deleted.isEmpty { print("Deleted IDs: \(deleted.joined(separator: ", "))") }
+            } else {
+                let policy = PrunePolicy(keepLast: keepLast, keepDays: keepDays)
+                let result = try manager.pruneInAzure(containerSASURL: sasURL, policy: policy)
+                print("Pruned (cloud). Deleted: \(result.deleted.count) | Kept: \(result.kept.count)")
+                if !result.deleted.isEmpty { print("Deleted IDs: \(result.deleted.joined(separator: ", "))") }
+            }
         }
     }
 }
@@ -323,7 +361,15 @@ extension Bckp {
         @Flag(name: .long, help: "Output as pretty JSON instead of tab-separated rows")
         var json: Bool = false
 
+        @Flag(name: .long, help: "Clear all tracked repositories (resets repositories.json)")
+        var clear: Bool = false
+
         func run() throws {
+            if clear {
+                RepositoriesConfigStore.shared.clearAll()
+                print("Cleared repositories.json")
+                return
+            }
             let cfg = RepositoriesConfigStore.shared.config
             if json {
                 let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]; enc.dateEncodingStrategy = .iso8601
