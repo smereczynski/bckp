@@ -22,15 +22,13 @@ A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates
 - External drives aware: on macOS, local repo keys include the external volume UUID when available, for stability across re-mounts
 - GUI external-drive picker (macOS): select an external volume, set a subpath, show the volume UUID and derived repositories.json key, and copy the key
 
-Repository layout:
+Repository layout (snapshots now use APFS sparse disk images):
 ```
 <repo>/
   config.json
   snapshots/
-    <SNAPSHOT_ID>/
-      manifest.json
-      data/
-        <source-basename>/...
+    <SNAPSHOT_ID>.sparseimage       # APFS sparse image; contains manifest.json and data/
+    [legacy] <SNAPSHOT_ID>/...      # Older directory-based snapshots are still supported
 ```
 
 ## Quick start
@@ -259,6 +257,28 @@ swift run bckp prune-azure --keep-last 10  # or --keep-days D
 
 Azure SAS: use a container-level SAS. For backup: write + list (and create). For restore/list: read (and list). Keep SAS secrets safe.
 
+## Sparse‑image snapshots (what gets created and where) 🔍
+
+This project stages each backup into an APFS sparse disk image for reliable atomic snapshots and faster cloud transfers.
+
+- Local repository snapshot artifact
+  - File path: `<repo>/snapshots/<SNAPSHOT_ID>.sparseimage`
+  - Inside the mounted image: `/manifest.json`, `/data/<source-basename>/...` and, if present, `/symlinks.json`
+  - During backup/list/restore, the image is temporarily attached at a per‑run mount point under the system temp directory, for example: `/var/folders/.../bckp-mount-<SNAPSHOT_ID>-<RANDOM>/`.
+  - After the operation, the image is detached; the `.sparseimage` file remains in `snapshots/`.
+
+- Azure container snapshot artifacts
+  - Image blob: `snapshots/<SNAPSHOT_ID>/<SNAPSHOT_ID>.sparseimage`
+  - Manifest blob: `snapshots/<SNAPSHOT_ID>/manifest.json`
+  - Optional symlinks map: `snapshots/<SNAPSHOT_ID>/symlinks.json`
+  - When restoring or listing, the image is downloaded to a temp file and attached to a temporary mount point (same pattern as local), then detached on completion.
+
+- Legacy directory snapshots
+  - Older snapshots may exist as a directory tree at `<repo>/snapshots/<SNAPSHOT_ID>/` with `manifest.json` and `data/` inside. Listing and restore support both formats.
+
+Notes on sizing
+- The sparse image capacity is computed from the planned copy size with headroom: at least 50% extra (minimum 64 MiB), rounded up to 8‑MiB blocks to avoid ENOSPC due to filesystem overhead. This is transparent to users but explains why images may appear larger than the raw data sum.
+
 ## Repository usage tracking (repositories.json)
 The tool tracks "which repos you use" and "when each source path was last backed up" to help future UI/automation.
 
@@ -389,20 +409,18 @@ Key design choices:
 Local repo on disk:
 ```
 <repo>/
-  config.json                 # RepoConfig
+  config.json                   # RepoConfig
   snapshots/
-    <SNAPSHOT_ID>/
-      manifest.json           # Snapshot
-      data/
-        <source-basename>/... # preserved directory trees
+    <SNAPSHOT_ID>.sparseimage   # APFS sparse image containing manifest.json, data/, symlinks.json (optional)
+    [legacy] <SNAPSHOT_ID>/...  # Older directory-based layout still supported for restore/list
 ```
 
-Azure container layout mirrors local:
+Azure container layout mirrors local (image + sidecar manifest):
 ```
-snapshots/<SNAPSHOT_ID>/manifest.json
-snapshots/<SNAPSHOT_ID>/data/<source-basename>/...
-snapshots/<SNAPSHOT_ID>/symlinks.json            # optional
 config.json                                       # at container root
+snapshots/<SNAPSHOT_ID>/<SNAPSHOT_ID>.sparseimage # APFS sparse image artifact
+snapshots/<SNAPSHOT_ID>/manifest.json             # sidecar manifest for quick listing
+snapshots/<SNAPSHOT_ID>/symlinks.json             # optional (legacy/compat helpers)
 ```
 
 repositories.json (Application Support):
@@ -412,24 +430,24 @@ repositories.json (Application Support):
 ### Execution flows (abridged)
 
 Local backup:
-1) ensureRepoInitialized → compute snapshotId → create directories.
-2) Plan phase: enumerate sources, apply filters (.bckpignore overrides CLI), build WorkItems and totals.
-3) Execute phase: copy files concurrently with per‑op FileManager; emit BackupProgress.
-4) Write manifest.json; return Snapshot; update repositories.json via CLI/GUI layer.
+1) ensureRepoInitialized → compute snapshotId → create a right‑sized APFS sparse image at `<repo>/snapshots/<SNAPSHOT_ID>.sparseimage` and attach it to a temporary mount point.
+2) Plan phase: enumerate sources, apply filters (.bckpignore overrides CLI), build WorkItems and totals; image sized as totalBytes + headroom.
+3) Execute phase: copy directly into the mounted image under `/data/<source-basename>/...`; emit BackupProgress.
+4) Write `/manifest.json` inside the mounted image; detach; return Snapshot; update repositories.json via CLI/GUI layer.
 
 Azure backup:
 1) ensureAzureRepoInitialized → compute snapshotId.
-2) Plan like local; tasks mapped to blob paths under snapshots/<id>/data.
-3) Upload: single PUT for small, chunked for large; progress emitted similarly.
-4) Upload manifest.json (and symlinks.json if present); return Snapshot.
+2) Plan like local; stage files into a temporary right‑sized APFS sparse image (same as local).
+3) Detach the image and upload two blobs under `snapshots/<SNAPSHOT_ID>/`: `<SNAPSHOT_ID>.sparseimage` and `manifest.json` (plus `symlinks.json` if present). Large image uploads use chunked blocks.
+4) Return Snapshot; repositories.json is updated by the CLI/GUI layer.
 
 List snapshots:
-- Local: read manifests from each snapshot dir; sort by createdAt.
-- Azure: list prefixes under snapshots/; download manifest.json per prefix; sort.
+- Local: for `.sparseimage` snapshots, temporarily attach and read `/manifest.json`; for legacy directory snapshots, read manifest from the directory; sort by createdAt.
+- Azure: list prefixes under `snapshots/`; download `manifest.json` per prefix (no need to download the image); sort.
 
 Restore:
-- Local: copy files from data/ back to destination; recreate symlinks.
-- Azure: list blobs under data prefix; download concurrently; recreate symlinks if present.
+- Local: if the snapshot is a `.sparseimage`, attach it, copy from `/data/` to the destination, recreate symlinks, then detach. Legacy directory snapshots copy from the on‑disk `data/`.
+- Azure: download `<SNAPSHOT_ID>.sparseimage`, attach it, copy from `/data/` to the destination, recreate symlinks, then detach. If a legacy directory snapshot exists in the container, fall back to per‑file download.
 
 Prune:
 - Compute kept IDs by union of keepLast and keepDays; delete others (local: remove dirs; Azure: list+delete blobs by prefix).
@@ -471,6 +489,7 @@ Prune:
 - Logging: human-readable NDJSON lines written under `~/Library/Logs/bckp/` by default; adjustable via config `[logging] debug=true`.
 - Some folders require Full Disk Access. Grant your Terminal app Full Disk Access in System Settings > Privacy & Security.
 - Tests may fail with `no such module XCTest` if only Command Line Tools are installed. Install full Xcode and run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
+ - Encryption status: Sparse‑image snapshots are not encrypted by bckp yet. Use FileVault/disk encryption if needed today. A native macOS encryption feature is being explored; the ObjectivePGP PoC is not active in the current sparse‑image flow.
 
 ### Tests (Azure integration)
 - `swift test` runs local tests and an optional Azure integration test.
