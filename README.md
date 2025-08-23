@@ -19,6 +19,7 @@ A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates
 - Repository usage tracking: persists last-used per repository and last-backup per source path
 - GUI Repositories panel: browse repositories.json with filter, sort, live auto-refresh, and “Open JSON”
 - CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json)
+ - CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json), plus `--clear` to reset the index
 - External drives aware: on macOS, local repo keys include the external volume UUID when available, for stability across re-mounts
 - GUI external-drive picker (macOS): select an external volume, set a subpath, show the volume UUID and derived repositories.json key, and copy the key
 
@@ -163,6 +164,9 @@ swift run bckp repos
 
 # Or pretty JSON
 swift run bckp repos --json
+
+# Reset the index (dangerous; does not delete snapshots)
+swift run bckp repos --clear
 ```
 
 ### Restore a snapshot
@@ -177,7 +181,13 @@ swift run bckp prune --repo ~/Backups/bckp --keep-last 5
 
 # or keep snapshots from the last 30 days
 swift run bckp prune --repo ~/Backups/bckp --keep-days 30
+
+# Force delete ALL snapshots, including the newest (dangerous)
+swift run bckp prune --repo ~/Backups/bckp --force-all
 ```
+
+Notes:
+- By default, pruning is safety‑first and always keeps the newest snapshot even if `--keep-last 0 --keep-days 0` are given. Use `--force-all` to bypass this safety and remove everything.
 
 ### External drives (macOS)
 
@@ -253,6 +263,9 @@ swift run bckp restore-azure <SNAPSHOT_ID> --destination /tmp/restore --concurre
 ```bash
 swift run bckp prune-azure --keep-last 10  # or --keep-days D
 # optionally add --sas to override config
+
+# Force delete ALL cloud snapshots, including the newest (dangerous)
+swift run bckp prune-azure --force-all
 ```
 
 Azure SAS: use a container-level SAS. For backup: write + list (and create). For restore/list: read (and list). Keep SAS secrets safe.
