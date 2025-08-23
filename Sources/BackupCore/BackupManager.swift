@@ -18,7 +18,7 @@ public final class BackupManager {
     // MARK: Repo
     // Create the repository folders and write a tiny JSON config so we know it's initialized.
     public func initRepo(at repoURL: URL = defaultRepoURL) throws {
-    Logger.shared.info("initRepo at \(repoURL.path)", subsystem: "core.repo")
+        Logger.shared.info("initRepo at \(repoURL.path)", subsystem: "core.repo")
         if fm.fileExists(atPath: repoURL.path) {
             // If exists but missing config, treat as uninitialized
             let configURL = repoURL.appendingPathComponent("config.json")
@@ -68,15 +68,19 @@ public final class BackupManager {
             return src
         }
 
-        let snapshotId = Self.makeSnapshotId()
+    let snapshotId = Self.makeSnapshotId()
     Logger.shared.info("backup starting id=\(snapshotId) sources=\(validSources.count)", subsystem: "core.backup", context: ["repo": repoURL.path])
-        let snapshotDir = repoURL.appendingPathComponent("snapshots/\(snapshotId)", isDirectory: true)
-        let dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
-        try fm.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+
+    // We'll size the sparse image to the estimated required size with a safety margin.
+    // First, plan work and compute totalBytes below, then create the image accordingly.
+    let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
+    try fm.createDirectory(at: snapsDir, withIntermediateDirectories: true)
+    let imageURL = snapsDir.appendingPathComponent("\(snapshotId).sparseimage")
+    let snapshotDir = snapsDir.appendingPathComponent(snapshotId, isDirectory: true)
 
         // Load per-source .bckpignore patterns
-    // Per-source filter set. If a source has a .bckpignore file, it overrides CLI include/exclude for that source.
-    struct SourceFilter { let include: [String]; let exclude: [String]; let reincludes: [String] }
+        // Per-source filter set. If a source has a .bckpignore file, it overrides CLI include/exclude for that source.
+        struct SourceFilter { let include: [String]; let exclude: [String]; let reincludes: [String] }
         var perSource: [URL: SourceFilter] = [:]
         for src in validSources {
             let ignoreURL = src.appendingPathComponent(".bckpignore")
@@ -89,23 +93,19 @@ public final class BackupManager {
 
         // Work item represents a copy or symlink recreation
         enum WorkKind { case file(size: Int64), symlink }
-        struct WorkItem { let src: URL; let dst: URL; let relPath: String; let kind: WorkKind }
+    struct WorkItem { let src: URL; let top: String; let relPath: String; let kind: WorkKind }
 
-        var tasks: [WorkItem] = []
-        var totalFiles = 0 // regular files only
-        var totalBytes: Int64 = 0
+    var tasks: [WorkItem] = []
+    var totalFiles = 0 // regular files only
+    var totalBytes: Int64 = 0
 
-    // Phase 1: Enumerate and plan work; create directories as needed so phase 2 can run safely in parallel.
-        for src in validSources {
-            let destRoot = dataRoot.appendingPathComponent(src.lastPathComponent, isDirectory: true)
-            try fm.createDirectory(at: destRoot, withIntermediateDirectories: true)
-
+        // Phase 1: Enumerate and plan work; create directories as needed so phase 2 can run safely in parallel.
+    for src in validSources {
             let enumerator = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles])
 
             while let item = enumerator?.nextObject() as? URL {
                 let rv = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
                 let relPath = Self.relativePath(of: item, under: src)
-                let destURL = destRoot.appendingPathComponent(relPath)
                 let filter = perSource[src] ?? SourceFilter(include: options.include, exclude: options.exclude, reincludes: [])
 
                 if rv.isDirectory == true {
@@ -114,49 +114,60 @@ public final class BackupManager {
                         enumerator?.skipDescendants()
                         continue
                     }
-                    try fm.createDirectory(at: destURL, withIntermediateDirectories: true)
+            // No-op during planning
                 } else if rv.isRegularFile == true {
                     if !Self.isIncluded(relPath: relPath, include: filter.include, exclude: filter.exclude, reincludes: filter.reincludes) { continue }
-                    let parent = destURL.deletingLastPathComponent()
-                    try fm.createDirectory(at: parent, withIntermediateDirectories: true)
                     let size = Int64(rv.fileSize ?? 0)
-                    tasks.append(WorkItem(src: item, dst: destURL, relPath: relPath, kind: .file(size: size)))
+            tasks.append(WorkItem(src: item, top: src.lastPathComponent, relPath: relPath, kind: .file(size: size)))
                     totalFiles += 1
                     totalBytes += size
                 } else if rv.isSymbolicLink == true {
                     if !Self.isIncluded(relPath: relPath, include: filter.include, exclude: filter.exclude, reincludes: filter.reincludes) { continue }
-                    let parent = destURL.deletingLastPathComponent()
-                    try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-                    tasks.append(WorkItem(src: item, dst: destURL, relPath: relPath, kind: .symlink))
+            tasks.append(WorkItem(src: item, top: src.lastPathComponent, relPath: relPath, kind: .symlink))
                 }
             }
         }
 
+    // Now that we know totalBytes, create and mount the sparse image sized to fit with headroom.
+    // Use 1.2x headroom and minimum 1 MiB.
+    let headroomBytes = max(Int64(64 * 1024 * 1024), Int64(Double(totalBytes) * 0.5))
+    var capacity = max(Int64(1 * 1024 * 1024), totalBytes + headroomBytes)
+    // Round up to nearest 8 MiB to reduce APFS overhead issues
+    let eightMiB: Int64 = 8 * 1024 * 1024
+    capacity = ((capacity + eightMiB - 1) / eightMiB) * eightMiB
+    let mib = (capacity + 1024 * 1024 - 1) / (1024 * 1024)
+    let sizeArg = "\(mib)m"
+    try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)")
+    let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: snapshotDir)
+    defer { try? DiskImage.detach(device: device) }
+    let dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
+    try fm.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+
     // Phase 2: Execute work concurrently with progress reporting.
         let maxConcurrency = max(1, options.concurrency ?? ProcessInfo.processInfo.activeProcessorCount)
-    let queue = OperationQueue()
+        let queue = OperationQueue()
         queue.maxConcurrentOperationCount = maxConcurrency
         queue.qualityOfService = .userInitiated
 
-    // Progress aggregation must be thread-safe, so we guard with a serial queue.
-    let progressSync = DispatchQueue(label: "bckp.progress.sync")
+        // Progress aggregation must be thread-safe, so we guard with a serial queue.
+        let progressSync = DispatchQueue(label: "bckp.progress.sync")
         var processedFiles = 0
         var processedBytes: Int64 = 0
-    // We capture only the first error (if any) and surface it after all ops complete.
-    var firstError: Error?
+        // We capture only the first error (if any) and surface it after all ops complete.
+        var firstError: Error?
 
-        for t in tasks {
+    for t in tasks {
             queue.addOperation {
                 // Use a dedicated FileManager per op for thread-safety
                 let localFM = FileManager()
                 do {
                     switch t.kind {
                     case .file(let size):
-                        let parent = t.dst.deletingLastPathComponent()
+                        let dst = dataRoot.appendingPathComponent(t.top, isDirectory: true).appendingPathComponent(t.relPath)
+                        let parent = dst.deletingLastPathComponent()
                         try? localFM.createDirectory(at: parent, withIntermediateDirectories: true)
-                        let tmp = t.dst.appendingPathExtension(".tmp-\(UUID().uuidString)")
-                        try localFM.copyItem(at: t.src, to: tmp)
-                        try localFM.moveItem(at: tmp, to: t.dst)
+                        if localFM.fileExists(atPath: dst.path) { try? localFM.removeItem(at: dst) }
+                        try localFM.copyItem(at: t.src, to: dst)
                         progressSync.sync {
                             processedFiles += 1
                             processedBytes += size
@@ -165,14 +176,15 @@ public final class BackupManager {
                             }
                         }
                     case .symlink:
-                        let parent = t.dst.deletingLastPathComponent()
+            let dst = dataRoot.appendingPathComponent(t.top, isDirectory: true).appendingPathComponent(t.relPath)
+            let parent = dst.deletingLastPathComponent()
                         try? localFM.createDirectory(at: parent, withIntermediateDirectories: true)
                         do {
                             let destPath = try localFM.destinationOfSymbolicLink(atPath: t.src.path)
-                            try localFM.createSymbolicLink(atPath: t.dst.path, withDestinationPath: destPath)
+                try localFM.createSymbolicLink(atPath: dst.path, withDestinationPath: destPath)
                         } catch {
                             // Fallback to copying contents
-                            try localFM.copyItem(at: t.src, to: t.dst)
+                try localFM.copyItem(at: t.src, to: dst)
                         }
                         // Symlinks do not affect file counters in Snapshot; we still can emit progress without changing counts
                         if let cb = progress {
@@ -182,14 +194,14 @@ public final class BackupManager {
                         }
                     }
                 } catch {
-                    Logger.shared.error("copy failed: \(t.relPath) -> \(t.dst.path): \(error)", subsystem: "core.backup")
+            Logger.shared.error("copy failed: \(t.relPath): \(error)", subsystem: "core.backup")
                     progressSync.sync { if firstError == nil { firstError = error } }
                 }
             }
         }
 
         queue.waitUntilAllOperationsAreFinished()
-    if let err = firstError { Logger.shared.error("backup failed: \(err)", subsystem: "core.backup"); throw err }
+        if let err = firstError { Logger.shared.error("backup failed: \(err)", subsystem: "core.backup"); throw err }
 
         let snapshot = Snapshot(
             id: snapshotId,
@@ -200,21 +212,21 @@ public final class BackupManager {
             relativePath: "snapshots/\(snapshotId)"
         )
 
-    // Write manifest (JSON) so we can list and inspect this snapshot later.
+        // Write manifest (JSON) so we can list and inspect this snapshot later. Store it inside the mounted image.
         let manifestURL = snapshotDir.appendingPathComponent("manifest.json")
         let data = try JSON.encoder.encode(snapshot)
         try data.write(to: manifestURL, options: [.atomic])
 
-    Logger.shared.info("backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.backup")
-    return snapshot
+        Logger.shared.info("backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.backup")
+        return snapshot
     }
 
     // MARK: Prune
     /// Remove old snapshots according to a policy. Always keeps at least the most recent snapshot.
     public func prune(in repoURL: URL = defaultRepoURL, policy: PrunePolicy) throws -> PruneResult {
         try ensureRepoInitialized(repoURL)
-    let items = try listSnapshots(in: repoURL) // ascending by createdAt
-    if items.isEmpty { Logger.shared.info("prune: no snapshots", subsystem: "core.prune"); return PruneResult(deleted: [], kept: []) }
+        let items = try listSnapshots(in: repoURL) // ascending by createdAt
+        if items.isEmpty { Logger.shared.info("prune: no snapshots", subsystem: "core.prune"); return PruneResult(deleted: [], kept: []) }
 
         let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
         var keep = Set<String>()
@@ -242,6 +254,10 @@ public final class BackupManager {
             if FileManager.default.fileExists(atPath: dir.path) {
                 try? FileManager.default.removeItem(at: dir)
             }
+            let img = snapsDir.appendingPathComponent("\(it.id).sparseimage")
+            if FileManager.default.fileExists(atPath: img.path) {
+                try? FileManager.default.removeItem(at: img)
+            }
             deleted.append(it.id)
         }
         Logger.shared.info("prune finished deleted=\(deleted.count) kept=\(kept.count)", subsystem: "core.prune")
@@ -252,16 +268,25 @@ public final class BackupManager {
     /// Restore a snapshot by copying its files to the destination folder.
     public func restore(snapshotId: String, from repoURL: URL = defaultRepoURL, to destination: URL) throws {
         try ensureRepoInitialized(repoURL)
-        let snapshotDir = repoURL.appendingPathComponent("snapshots/\(snapshotId)", isDirectory: true)
+        let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
+        let snapshotDir = snapsDir.appendingPathComponent("\(snapshotId)", isDirectory: true)
+        let imageURL = snapsDir.appendingPathComponent("\(snapshotId).sparseimage")
+        var mountedDev: String?
+        if fm.fileExists(atPath: imageURL.path) {
+            let res = try DiskImage.attach(imageURL: imageURL, mountpoint: snapshotDir)
+            mountedDev = res.device
+        }
+        defer { if let dev = mountedDev { try? DiskImage.detach(device: dev) } }
+
         let manifestURL = snapshotDir.appendingPathComponent("manifest.json")
         guard fm.fileExists(atPath: manifestURL.path) else { throw BackupError.snapshotNotFound(snapshotId) }
 
         let dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
 
-    // Copy back contents of dataRoot to destination
+        // Copy back contents of dataRoot to destination
         let enumerator = fm.enumerator(at: dataRoot, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey], options: [])
-    while let item = enumerator?.nextObject() as? URL {
+        while let item = enumerator?.nextObject() as? URL {
             let relPath = Self.relativePath(of: item, under: dataRoot)
             let destURL = destination.appendingPathComponent(relPath)
             let rv = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
@@ -273,18 +298,18 @@ public final class BackupManager {
                 if fm.fileExists(atPath: destURL.path) {
                     try fm.removeItem(at: destURL)
                 }
-        do { try fm.copyItem(at: item, to: destURL) } catch { Logger.shared.error("restore copy failed: \(relPath): \(error)", subsystem: "core.restore"); throw error }
+                do { try fm.copyItem(at: item, to: destURL) } catch { Logger.shared.error("restore copy failed: \(relPath): \(error)", subsystem: "core.restore"); throw error }
             } else if rv.isSymbolicLink == true {
                 let parent = destURL.deletingLastPathComponent()
                 try fm.createDirectory(at: parent, withIntermediateDirectories: true)
                 if fm.fileExists(atPath: destURL.path) {
                     try fm.removeItem(at: destURL)
                 }
-        let destPath = try fm.destinationOfSymbolicLink(atPath: item.path)
-        try fm.createSymbolicLink(atPath: destURL.path, withDestinationPath: destPath)
+                let destPath = try fm.destinationOfSymbolicLink(atPath: item.path)
+                try fm.createSymbolicLink(atPath: destURL.path, withDestinationPath: destPath)
             }
         }
-    Logger.shared.info("restore finished snapshot=\(snapshotId) to=\(destination.path)", subsystem: "core.restore")
+        Logger.shared.info("restore finished snapshot=\(snapshotId) to=\(destination.path)", subsystem: "core.restore")
     }
 
     // MARK: List
@@ -294,15 +319,33 @@ public final class BackupManager {
         guard let entries = try? fm.contentsOfDirectory(at: snapsDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
             return []
         }
-        var items: [SnapshotListItem] = []
-    for dir in entries where dir.isDirectory {
+        var itemsById: [String: SnapshotListItem] = [:]
+        // Mounted directories (if any)
+        for dir in entries where dir.hasDirectoryPath {
+            let id = dir.lastPathComponent
             let manifest = dir.appendingPathComponent("manifest.json")
             if let data = try? Data(contentsOf: manifest), let snap = try? JSON.decoder.decode(Snapshot.self, from: data) {
-        // Use full source paths in listings
-        items.append(SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources))
+                // Use full source paths in listings
+                itemsById[id] = SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources)
             }
         }
-        return items.sorted { $0.createdAt < $1.createdAt }
+        // Sparse images (mount temporarily to read manifest)
+        for img in entries where img.pathExtension == "sparseimage" {
+            let id = img.deletingPathExtension().lastPathComponent
+            if itemsById[id] != nil { continue }
+            let mount = snapsDir.appendingPathComponent(id, isDirectory: true)
+            do {
+                let (dev, _) = try DiskImage.attach(imageURL: img, mountpoint: mount)
+                defer { try? DiskImage.detach(device: dev) }
+                let manifest = mount.appendingPathComponent("manifest.json")
+                if let data = try? Data(contentsOf: manifest), let snap = try? JSON.decoder.decode(Snapshot.self, from: data) {
+                    itemsById[id] = SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources)
+                }
+            } catch {
+                continue
+            }
+        }
+        return itemsById.values.sorted { $0.createdAt < $1.createdAt }
     }
 
     // Helpers

@@ -291,7 +291,7 @@ public extension BackupManager {
         if !ok { throw BackupError.repoNotInitialized(containerSASURL) }
     }
 
-    /// Backup sources to Azure Blob container under snapshots/<id>/
+    /// Backup sources to Azure by staging into a 1 MB sparse disk image, then uploading the image under snapshots/<id>/<id>.sparseimage and manifest.json alongside.
     func backupToAzure(sources: [URL], containerSASURL: URL, options: BackupOptions = BackupOptions(), progress: ((BackupProgress) -> Void)? = nil) throws -> Snapshot {
         try ensureAzureRepoInitialized(containerSASURL)
         let client = AzureBlobClient(containerSASURL: containerSASURL)
@@ -303,8 +303,7 @@ public extension BackupManager {
         }
 
         let snapshotId = Self.makeSnapshotId()
-        let basePrefix = "snapshots/\(snapshotId)"
-        let dataPrefix = basePrefix + "/data"
+    let basePrefix = "snapshots/\(snapshotId)"
 
         // Per-source .bckpignore
         struct SourceFilter { let include: [String]; let exclude: [String]; let reincludes: [String] }
@@ -316,14 +315,15 @@ public extension BackupManager {
             perSource[src] = SourceFilter(include: inc, exclude: exc, reincludes: parsed.reincludes)
         }
 
-        enum WorkKind { case file(size: Int64), symlink(dest: String) }
-        struct WorkItem { let src: URL; let blobPath: String; let relPath: String; let kind: WorkKind }
+    enum WorkKind { case file(size: Int64), symlink }
+    struct WorkItem { let src: URL; let top: String; let relPath: String; let kind: WorkKind }
 
-        var tasks: [WorkItem] = []
+    var tasks: [WorkItem] = []
         var totalFiles = 0
         var totalBytes: Int64 = 0
         var symlinks: [String: String] = [:] // relPath -> destination
 
+        // Plan tasks by enumerating sources; we'll size the sparse image based on totalBytes
         for src in validSources {
             let enumerator = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey], options: [.skipsHiddenFiles])
             while let item = enumerator?.nextObject() as? URL {
@@ -333,66 +333,84 @@ public extension BackupManager {
                 if rv.isDirectory == true {
                     if anyMatch(filter.exclude, path: relPath) && !anyMatch(filter.reincludes, path: relPath) {
                         enumerator?.skipDescendants()
+                        continue
                     }
-                    continue
+                    // no-op during planning
                 } else if rv.isRegularFile == true {
                     if !Self.isIncluded(relPath: relPath, include: filter.include, exclude: filter.exclude, reincludes: filter.reincludes) { continue }
                     let size = Int64(rv.fileSize ?? 0)
-                    let blobPath = dataPrefix + "/" + src.lastPathComponent + "/" + relPath
-                    tasks.append(WorkItem(src: item, blobPath: blobPath, relPath: relPath, kind: .file(size: size)))
+                    tasks.append(WorkItem(src: item, top: src.lastPathComponent, relPath: relPath, kind: .file(size: size)))
                     totalFiles += 1
                     totalBytes += size
                 } else if rv.isSymbolicLink == true {
                     if !Self.isIncluded(relPath: relPath, include: filter.include, exclude: filter.exclude, reincludes: filter.reincludes) { continue }
                     let dest = try fm.destinationOfSymbolicLink(atPath: item.path)
                     symlinks[relPath] = dest
+                    tasks.append(WorkItem(src: item, top: src.lastPathComponent, relPath: relPath, kind: .symlink))
                 }
             }
         }
 
-        let maxConcurrency = max(1, options.concurrency ?? ProcessInfo.processInfo.activeProcessorCount)
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = maxConcurrency
-        queue.qualityOfService = .userInitiated
-        let sync = DispatchQueue(label: "bckp.azure.progress")
-        var processedFiles = 0
-        var processedBytes: Int64 = 0
-        var firstError: Error?
+        // Create and attach the sparse image sized with headroom; then stage the files
+        let tmpRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+        let imageURL = tmpRoot.appendingPathComponent("bckp-\(snapshotId).sparseimage")
+        let mountPoint = tmpRoot.appendingPathComponent("bckp-mount-\(snapshotId)", isDirectory: true)
+    let headroomBytes = max(Int64(64 * 1024 * 1024), Int64(Double(totalBytes) * 0.5))
+    var capacity = max(Int64(1 * 1024 * 1024), totalBytes + headroomBytes)
+    let eightMiB: Int64 = 8 * 1024 * 1024
+    capacity = ((capacity + eightMiB - 1) / eightMiB) * eightMiB
+    let mib = (capacity + 1024 * 1024 - 1) / (1024 * 1024)
+        let sizeArg = "\(mib)m"
+        try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)")
+        let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: mountPoint)
+        defer { try? DiskImage.detach(device: device) }
+        let dataRoot = mountPoint.appendingPathComponent("data", isDirectory: true)
+        try fm.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+
         for t in tasks {
-            queue.addOperation {
-                do {
-                    try client.uploadFile(localURL: t.src, toBlobPath: t.blobPath)
-                    sync.sync {
-                        processedFiles += 1
-                        if case .file(let size) = t.kind { processedBytes += size }
-                        if let cb = progress {
-                            cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: t.relPath))
-                        }
-                    }
-                } catch {
-                    sync.sync { if firstError == nil { firstError = error } }
+            switch t.kind {
+            case .file:
+                let dst = dataRoot.appendingPathComponent(t.top, isDirectory: true).appendingPathComponent(t.relPath)
+                try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? fm.removeItem(at: dst)
+                try fm.copyItem(at: t.src, to: dst)
+            case .symlink:
+                let dst = dataRoot.appendingPathComponent(t.top, isDirectory: true).appendingPathComponent(t.relPath)
+                try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let dest = symlinks[t.relPath] ?? (try? fm.destinationOfSymbolicLink(atPath: t.src.path)) ?? ""
+                if !dest.isEmpty {
+                    try? fm.createSymbolicLink(atPath: dst.path, withDestinationPath: dest)
                 }
             }
         }
-    queue.waitUntilAllOperationsAreFinished()
-    if let err = firstError { Logger.shared.error("azure backup failed: \(err)", subsystem: "core.azure"); throw err }
+
+        // No per-file uploads: we staged locally into a sparse image; we'll upload it in one go below.
 
         // Write symlinks.json (if any) and manifest.json
+        // Write manifest inside the mounted image, then detach and upload the sparse image
+        let snapshot = Snapshot(id: snapshotId, createdAt: Date(), sources: validSources.map { $0.path }, totalFiles: totalFiles, totalBytes: totalBytes, relativePath: basePrefix)
+        let manifestData = try JSON.encoder.encode(snapshot)
+        let manifestURL = mountPoint.appendingPathComponent("manifest.json")
+        try manifestData.write(to: manifestURL, options: [.atomic])
+        // Ensure data is flushed by detaching before upload
+        try DiskImage.detach(device: device)
+        // Upload the sparse image
+    try client.uploadFile(localURL: imageURL, toBlobPath: basePrefix + "/\(snapshotId).sparseimage")
+    // Cleanup local staging artifacts
+    try? FileManager.default.removeItem(at: imageURL)
+        // Also upload manifest.json alongside for quick listing without mounting
+        let tmpManifest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-manifest-\(snapshotId).json")
+        try manifestData.write(to: tmpManifest, options: [.atomic])
+        try client.uploadFile(localURL: tmpManifest, toBlobPath: basePrefix + "/manifest.json")
+        // Optionally upload symlinks.json derived from the staging step
         if !symlinks.isEmpty {
             let data = try JSONSerialization.data(withJSONObject: symlinks, options: [.prettyPrinted, .sortedKeys])
-            let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-symlinks.json")
+            let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-symlinks-\(snapshotId).json")
             try data.write(to: tmp, options: [.atomic])
             try client.uploadFile(localURL: tmp, toBlobPath: basePrefix + "/symlinks.json")
         }
-
-        let snapshot = Snapshot(id: snapshotId, createdAt: Date(), sources: validSources.map { $0.path }, totalFiles: totalFiles, totalBytes: totalBytes, relativePath: basePrefix)
-        let manifestData = try JSON.encoder.encode(snapshot)
-        let tmpManifest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-manifest.json")
-    try manifestData.write(to: tmpManifest, options: Data.WritingOptions.atomic)
-        try client.uploadFile(localURL: tmpManifest, toBlobPath: basePrefix + "/manifest.json")
-
-    Logger.shared.info("azure backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.azure")
-    return snapshot
+        Logger.shared.info("azure backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.azure")
+        return snapshot
     }
 
     func listSnapshotsInAzure(containerSASURL: URL) throws -> [SnapshotListItem] {
@@ -428,27 +446,59 @@ public extension BackupManager {
         let exists = (try? client.exists(blobPath: "snapshots/\(snapshotId)/manifest.json")) ?? false
     if !exists { Logger.shared.error("azure restore: manifest not found for id=\(snapshotId)", subsystem: "core.azure"); throw AzureError.snapshotNotFound(snapshotId) }
 
-        // Download all blobs under data prefix
-        let dataPrefix = "snapshots/\(snapshotId)/data/"
-        let list = try client.list(prefix: dataPrefix, delimiter: nil)
-        let blobs = list.blobs // full names including prefix
-        // Concurrently download
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = max(1, concurrency ?? ProcessInfo.processInfo.activeProcessorCount)
-        queue.qualityOfService = .userInitiated
-        var firstError: Error?
-        for b in blobs {
-            // Compute local path relative to dataPrefix
-            guard b.hasPrefix(dataPrefix) else { continue }
-            let rel = String(b.dropFirst(dataPrefix.count))
-            let local = destination.appendingPathComponent(rel)
-            queue.addOperation {
-                do { try client.download(to: local, blobPath: b) } catch { if firstError == nil { firstError = error } }
+        // If an image exists, prefer mounting the image and copying locally. Otherwise, fall back to per-file download.
+        let imageBlobPath = "snapshots/\(snapshotId)/\(snapshotId).sparseimage"
+        if (try? client.exists(blobPath: imageBlobPath)) == true {
+            let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            let localImage = tmp.appendingPathComponent("bckp-restore-\(snapshotId).sparseimage")
+            try client.download(to: localImage, blobPath: imageBlobPath)
+            // Attach and copy data/
+            let mountPoint = tmp.appendingPathComponent("bckp-restore-mount-\(snapshotId)", isDirectory: true)
+            let (dev, _) = try DiskImage.attach(imageURL: localImage, mountpoint: mountPoint)
+            defer { try? DiskImage.detach(device: dev) }
+            let dataRoot = mountPoint.appendingPathComponent("data", isDirectory: true)
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            let enumerator = FileManager.default.enumerator(at: dataRoot, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey], options: [])
+            while let item = enumerator?.nextObject() as? URL {
+                let rel = BackupManager.relativePath(of: item, under: dataRoot)
+                let out = destination.appendingPathComponent(rel)
+                let rv = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+                if rv.isDirectory == true {
+                    try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+                } else if rv.isRegularFile == true {
+                    try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if FileManager.default.fileExists(atPath: out.path) { try? FileManager.default.removeItem(at: out) }
+                    try FileManager.default.copyItem(at: item, to: out)
+                } else if rv.isSymbolicLink == true {
+                    try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if FileManager.default.fileExists(atPath: out.path) { try? FileManager.default.removeItem(at: out) }
+                    let dest = try FileManager.default.destinationOfSymbolicLink(atPath: item.path)
+                    try? FileManager.default.createSymbolicLink(atPath: out.path, withDestinationPath: dest)
+                }
             }
+        } else {
+            // Download all blobs under data prefix (legacy layout)
+            let dataPrefix = "snapshots/\(snapshotId)/data/"
+            let list = try client.list(prefix: dataPrefix, delimiter: nil)
+            let blobs = list.blobs // full names including prefix
+            // Concurrently download
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = max(1, concurrency ?? ProcessInfo.processInfo.activeProcessorCount)
+            queue.qualityOfService = .userInitiated
+            var firstError: Error?
+            for b in blobs {
+                // Compute local path relative to dataPrefix
+                guard b.hasPrefix(dataPrefix) else { continue }
+                let rel = String(b.dropFirst(dataPrefix.count))
+                let local = destination.appendingPathComponent(rel)
+                queue.addOperation {
+                    do { try client.download(to: local, blobPath: b) } catch { if firstError == nil { firstError = error } }
+                }
+            }
+            queue.waitUntilAllOperationsAreFinished()
+            if let err = firstError { Logger.shared.error("azure restore failed: \(err)", subsystem: "core.azure"); throw err }
         }
-    queue.waitUntilAllOperationsAreFinished()
-    if let err = firstError { Logger.shared.error("azure restore failed: \(err)", subsystem: "core.azure"); throw err }
 
         // Recreate symlinks if symlinks.json exists
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-symlinks-\(snapshotId).json")
