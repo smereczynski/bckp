@@ -323,7 +323,15 @@ extension Bckp {
         @Flag(name: .long, help: "Output as pretty JSON instead of tab-separated rows")
         var json: Bool = false
 
+        @Flag(name: .long, help: "Clear all tracked repositories (resets repositories.json)")
+        var clear: Bool = false
+
         func run() throws {
+            if clear {
+                RepositoriesConfigStore.shared.clearAll()
+                print("Cleared repositories.json")
+                return
+            }
             let cfg = RepositoriesConfigStore.shared.config
             if json {
                 let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]; enc.dateEncodingStrategy = .iso8601
