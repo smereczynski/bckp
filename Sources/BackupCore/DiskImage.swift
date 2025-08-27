@@ -65,9 +65,39 @@ struct DiskImage {
         return (device: dev, mountPoint: URL(fileURLWithPath: mnt))
     }
 
-    static func detach(device: String, force: Bool = false) throws {
+    /// Attempt to detach a device, with an optional busy-check on the mount point to fail fast when open files exist.
+    /// If `mountPoint` is provided and appears busy (via `lsof`), this throws without attempting a force detach.
+    static func detach(device: String, mountPoint: URL? = nil, force: Bool = false) throws {
+        // Best-effort busy check using lsof when a mount point is known.
+        if let mp = mountPoint, isMountPointBusy(mp) {
+            throw DiskImageError.commandFailed("Cannot detach \(device): mount point is busy (open files under \(mp.path))")
+        }
         var args = ["detach", device]
         if force { args.insert("-force", at: 1) }
         _ = try runHdiutil(args)
+    }
+
+    /// Returns true if there are open file descriptors under the mount point (best-effort using /usr/sbin/lsof).
+    private static func isMountPointBusy(_ mountPoint: URL) -> Bool {
+        let proc = Process()
+        // lsof typically resides at /usr/sbin/lsof on macOS
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        proc.arguments = ["-t", "+D", mountPoint.path]
+        let out = Pipe(); let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            // If lsof failed to run or returned an error, assume not busy (don't block detaches due to tooling absence)
+            if proc.terminationStatus != 0 { return false }
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            if data.isEmpty { return false }
+            // Any output indicates at least one PID has files open under mountPoint
+            return true
+        } catch {
+            // If lsof isn't available, fall back to no busy detection
+            return false
+        }
     }
 }

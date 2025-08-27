@@ -56,6 +56,10 @@ This document explains how the code is organized, what each file does, and how p
 - Called from CLI on init/backup/restore/list/prune (local and Azure) to update last-used and per-source last-backup.
 - Tests live in `Tests/BackupCoreTests/RepositoriesConfigStoreTests.swift`.
 ### BackupCore/AzureBlob.swift
+Minimal Azure Blob client + `BackupManager` extension for cloud repo operations.
+
+- Uploads: single PUT for small payloads (≤ 8 MiB), otherwise chunked Put Block/Put Block List with 8‑MiB blocks by default; last block may be smaller.
+- Integrity: computes MD5 over the full image; sets it on the blob and verifies via HEAD before cleanup.
 
 ### bckp-cli/main.swift
 - ArgumentParser-based CLI with local and Azure subcommands.
@@ -79,6 +83,7 @@ This document explains how the code is organized, what each file does, and how p
   - `restore(snapshotId:from:to:)` copies snapshot files into a destination folder.
   - `listSnapshots(in:)` reads each `manifest.json` and returns a summary list.
 - Uses `FileManager` to walk directories and copy files.
+- Progress tags (expected by CLI when `--progress` is enabled): `[plan]`, `[disk]`, `[data]`, `[hash]`, `[azure]`, `[cleanup]`, plus one `MD5 <base64>` line. The CLI prints only these high-level tags, not per-file names.
 - Preserves symlinks by re-creating them.
 - Skips hidden files when backing up (you can change this behavior in code).
 

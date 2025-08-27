@@ -94,15 +94,18 @@ extension Bckp {
                                          exclude: exclude.isEmpty ? cfg.exclude : exclude,
                                          concurrency: concurrency ?? cfg.concurrency)
             RepositoriesConfigStore.shared.updateConfiguredSourcesLocal(repoURL: repoURL, sources: sources)
+            var lastMD5: String?
             let snap = try manager.backup(sources: sources, to: repoURL, options: opts, progress: progress ? { p in
-                let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
-                let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
-                let total = ByteCountFormatter.string(fromByteCount: p.totalBytes, countStyle: .file)
                 let cur = p.currentPath ?? ""
-                print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
+                if cur.hasPrefix("MD5 ") { lastMD5 = String(cur.dropFirst(4)) }
+                // Show only known summary tags and the final MD5 line
+                if cur.hasPrefix("[plan]") || cur.hasPrefix("[disk]") || cur.hasPrefix("[data]") || cur.hasPrefix("[hash]") || cur.hasPrefix("[azure]") || cur.hasPrefix("[cleanup]") || cur.hasPrefix("MD5 ") {
+                    print(cur)
+                }
             } : nil)
             RepositoriesConfigStore.shared.recordBackupLocal(repoURL: repoURL, sourcePaths: sources)
-            print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
+            if let md5 = lastMD5 { print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes) | md5: \(md5)") }
+            else { print("Created snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)") }
         }
     }
 
@@ -250,15 +253,18 @@ extension Bckp {
                 let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
                 guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
                 RepositoriesConfigStore.shared.updateConfiguredSourcesAzure(containerSASURL: sasURL, sources: sources)
+                var lastMD5: String?
                 let snap = try manager.backupToAzure(sources: sources, containerSASURL: sasURL, options: opts, progress: progress ? { p in
-                let percent: Double = (p.totalBytes > 0) ? (Double(p.processedBytes) / Double(p.totalBytes) * 100.0) : 0
-                let processed = ByteCountFormatter.string(fromByteCount: p.processedBytes, countStyle: .file)
-                let total = ByteCountFormatter.string(fromByteCount: p.totalBytes, countStyle: .file)
                 let cur = p.currentPath ?? ""
-                print(String(format: "[%.0f%%] %d/%d files (%@/%@) %@", percent, p.processedFiles, p.totalFiles, processed, total, cur))
+                if cur.hasPrefix("MD5 ") { lastMD5 = String(cur.dropFirst(4)) }
+                // Show only known summary tags and the final MD5 line
+                if cur.hasPrefix("[plan]") || cur.hasPrefix("[disk]") || cur.hasPrefix("[data]") || cur.hasPrefix("[hash]") || cur.hasPrefix("[azure]") || cur.hasPrefix("[cleanup]") || cur.hasPrefix("MD5 ") {
+                    print(cur)
+                }
             } : nil)
             RepositoriesConfigStore.shared.recordBackupAzure(containerSASURL: sasURL, sourcePaths: sources)
-            print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)")
+            if let md5 = lastMD5 { print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes) | md5: \(md5)") }
+            else { print("Created cloud snapshot: \(snap.id) | files: \(snap.totalFiles) | size: \(snap.totalBytes)") }
         }
     }
 

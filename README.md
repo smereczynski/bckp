@@ -248,6 +248,24 @@ swift run bckp backup-azure --source ~/Documents --source ~/Pictures \
 # optionally add --sas to override config
 ```
 
+When running with `--progress`, the CLI prints high‑level stage tags only (no file names):
+
+```
+[plan] ...
+[disk] created ... / attached ...
+[data] copying data...
+[data] staging complete
+[disk] detaching / detached
+[hash] computing MD5
+MD5 <base64>
+[azure] upload start ...
+[azure] PUT ...
+[azure] verified MD5
+[cleanup] removed local image
+```
+
+The final summary includes the MD5 when `--progress` is used.
+
 - List Azure snapshots
 ```bash
 swift run bckp list-azure   # uses config SAS, or add --sas
@@ -277,20 +295,28 @@ This project stages each backup into an APFS sparse disk image for reliable atom
 - Local repository snapshot artifact
   - File path: `<repo>/snapshots/<SNAPSHOT_ID>.sparseimage`
   - Inside the mounted image: `/manifest.json`, `/data/<source-basename>/...` and, if present, `/symlinks.json`
-  - During backup/list/restore, the image is temporarily attached at a per‑run mount point under the system temp directory, for example: `/var/folders/.../bckp-mount-<SNAPSHOT_ID>-<RANDOM>/`.
+  - During backup/list/restore, the image is temporarily attached under `~/Backups` at a predictable per‑run mount point, for example: `~/Backups/bckp-local-<SNAPSHOT_ID>`.
   - After the operation, the image is detached; the `.sparseimage` file remains in `snapshots/`.
 
 - Azure container snapshot artifacts
   - Image blob: `snapshots/<SNAPSHOT_ID>/<SNAPSHOT_ID>.sparseimage`
   - Manifest blob: `snapshots/<SNAPSHOT_ID>/manifest.json`
   - Optional symlinks map: `snapshots/<SNAPSHOT_ID>/symlinks.json`
-  - When restoring or listing, the image is downloaded to a temp file and attached to a temporary mount point (same pattern as local), then detached on completion.
+  - When restoring or listing, the image is downloaded to `~/Backups/bckp-restore-<SNAPSHOT_ID>.sparseimage` and attached at `~/Backups/bckp-restore-mount-<SNAPSHOT_ID>`, then detached and the local image is removed on completion.
+
+Operational safety and integrity
+- Before detaching a mounted image, the tool checks if the mount point appears busy (open files under it) and will refuse to detach in that case.
+- Azure uploads compute an MD5 checksum of the sparse image and verify it against the blob’s MD5 after upload; the local staging image is deleted only after successful verification.
 
 - Legacy directory snapshots
   - Older snapshots may exist as a directory tree at `<repo>/snapshots/<SNAPSHOT_ID>/` with `manifest.json` and `data/` inside. Listing and restore support both formats.
 
 Notes on sizing
 - The sparse image capacity is computed from the planned copy size with headroom: at least 50% extra (minimum 64 MiB), rounded up to 8‑MiB blocks to avoid ENOSPC due to filesystem overhead. This is transparent to users but explains why images may appear larger than the raw data sum.
+
+Azure upload block size
+- For small images (≤ 8 MiB) the upload uses a single Put Blob request.
+- For larger images the upload streams using Azure Block Blob with 8‑MiB blocks (Put Block/Put Block List). The last block may be smaller. An MD5 over the full image is set and then verified after upload before local cleanup.
 
 ## Repository usage tracking (repositories.json)
 The tool tracks "which repos you use" and "when each source path was last backed up" to help future UI/automation.

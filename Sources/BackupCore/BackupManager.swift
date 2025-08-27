@@ -76,7 +76,7 @@ public final class BackupManager {
     let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
     try fm.createDirectory(at: snapsDir, withIntermediateDirectories: true)
     let imageURL = snapsDir.appendingPathComponent("\(snapshotId).sparseimage")
-    let snapshotDir = snapsDir.appendingPathComponent(snapshotId, isDirectory: true)
+    // Note: snapshotDir is no longer used as a mount target; we mount under ~/Backups instead.
 
         // Load per-source .bckpignore patterns
         // Per-source filter set. If a source has a .bckpignore file, it overrides CLI include/exclude for that source.
@@ -138,12 +138,20 @@ public final class BackupManager {
     let mib = (capacity + 1024 * 1024 - 1) / (1024 * 1024)
     let sizeArg = "\(mib)m"
     try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)")
-    let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: snapshotDir)
-    defer { try? DiskImage.detach(device: device) }
-    let dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
+    // Mount under ~/Backups instead of system temp to keep paths predictable
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let backupsRoot = home.appendingPathComponent("Backups", isDirectory: true)
+    try fm.createDirectory(at: backupsRoot, withIntermediateDirectories: true)
+    let mountPoint = backupsRoot.appendingPathComponent("bckp-local-\(snapshotId)", isDirectory: true)
+    let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: mountPoint)
+    defer { try? DiskImage.detach(device: device, mountPoint: mountPoint) }
+    let dataRoot = mountPoint.appendingPathComponent("data", isDirectory: true)
     try fm.createDirectory(at: dataRoot, withIntermediateDirectories: true)
 
     // Phase 2: Execute work concurrently with progress reporting.
+        if let cb = progress {
+            cb(BackupProgress(processedFiles: 0, totalFiles: totalFiles, processedBytes: 0, totalBytes: totalBytes, currentPath: "[data] copying data..."))
+        }
         let maxConcurrency = max(1, options.concurrency ?? ProcessInfo.processInfo.activeProcessorCount)
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = maxConcurrency
@@ -203,6 +211,10 @@ public final class BackupManager {
         queue.waitUntilAllOperationsAreFinished()
         if let err = firstError { Logger.shared.error("backup failed: \(err)", subsystem: "core.backup"); throw err }
 
+        if let cb = progress {
+            cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[data] staging complete"))
+        }
+
         let snapshot = Snapshot(
             id: snapshotId,
             createdAt: Date(),
@@ -213,9 +225,16 @@ public final class BackupManager {
         )
 
         // Write manifest (JSON) so we can list and inspect this snapshot later. Store it inside the mounted image.
-        let manifestURL = snapshotDir.appendingPathComponent("manifest.json")
+    let manifestURL = mountPoint.appendingPathComponent("manifest.json")
         let data = try JSON.encoder.encode(snapshot)
         try data.write(to: manifestURL, options: [.atomic])
+
+        // Optional: emit MD5 of the sparse image for visibility when a progress callback was provided by callers (e.g., CLI)
+        if let cb = progress {
+            if let md5 = try? BackupManager.fileMD5Base64(of: imageURL) {
+                cb(BackupProgress(processedFiles: totalFiles, totalFiles: totalFiles, processedBytes: totalBytes, totalBytes: totalBytes, currentPath: "MD5 " + md5))
+            }
+        }
 
         Logger.shared.info("backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.backup")
         return snapshot
@@ -269,19 +288,33 @@ public final class BackupManager {
     public func restore(snapshotId: String, from repoURL: URL = defaultRepoURL, to destination: URL) throws {
         try ensureRepoInitialized(repoURL)
         let snapsDir = repoURL.appendingPathComponent("snapshots", isDirectory: true)
-        let snapshotDir = snapsDir.appendingPathComponent("\(snapshotId)", isDirectory: true)
         let imageURL = snapsDir.appendingPathComponent("\(snapshotId).sparseimage")
-        var mountedDev: String?
+        var dataRoot: URL
+        var mountDev: String?
+        var mountPoint: URL?
         if fm.fileExists(atPath: imageURL.path) {
-            let res = try DiskImage.attach(imageURL: imageURL, mountpoint: snapshotDir)
-            mountedDev = res.device
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let backupsRoot = home.appendingPathComponent("Backups", isDirectory: true)
+            try fm.createDirectory(at: backupsRoot, withIntermediateDirectories: true)
+            let mp = backupsRoot.appendingPathComponent("bckp-restore-local-\(snapshotId)", isDirectory: true)
+            let res = try DiskImage.attach(imageURL: imageURL, mountpoint: mp)
+            mountDev = res.device
+            mountPoint = mp
+            let manifestURL = mp.appendingPathComponent("manifest.json")
+            guard fm.fileExists(atPath: manifestURL.path) else { throw BackupError.snapshotNotFound(snapshotId) }
+            dataRoot = mp.appendingPathComponent("data", isDirectory: true)
+        } else {
+            let snapshotDir = snapsDir.appendingPathComponent("\(snapshotId)", isDirectory: true)
+            let manifestURL = snapshotDir.appendingPathComponent("manifest.json")
+            guard fm.fileExists(atPath: manifestURL.path) else { throw BackupError.snapshotNotFound(snapshotId) }
+            dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
         }
-        defer { if let dev = mountedDev { try? DiskImage.detach(device: dev) } }
-
-        let manifestURL = snapshotDir.appendingPathComponent("manifest.json")
-        guard fm.fileExists(atPath: manifestURL.path) else { throw BackupError.snapshotNotFound(snapshotId) }
-
-        let dataRoot = snapshotDir.appendingPathComponent("data", isDirectory: true)
+        defer {
+            if let dev = mountDev, let mp = mountPoint {
+                try? DiskImage.detach(device: dev, mountPoint: mp)
+                try? fm.removeItem(at: mp)
+            }
+        }
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
 
         // Copy back contents of dataRoot to destination
@@ -329,14 +362,20 @@ public final class BackupManager {
                 itemsById[id] = SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources)
             }
         }
-        // Sparse images (mount temporarily to read manifest)
+        // Sparse images (mount temporarily under ~/Backups to read manifest)
         for img in entries where img.pathExtension == "sparseimage" {
             let id = img.deletingPathExtension().lastPathComponent
             if itemsById[id] != nil { continue }
-            let mount = snapsDir.appendingPathComponent(id, isDirectory: true)
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let backupsRoot = home.appendingPathComponent("Backups", isDirectory: true)
+            try? fm.createDirectory(at: backupsRoot, withIntermediateDirectories: true)
+            let mount = backupsRoot.appendingPathComponent("bckp-list-\(id)", isDirectory: true)
             do {
                 let (dev, _) = try DiskImage.attach(imageURL: img, mountpoint: mount)
-                defer { try? DiskImage.detach(device: dev) }
+                defer {
+                    try? DiskImage.detach(device: dev, mountPoint: mount)
+                    try? fm.removeItem(at: mount)
+                }
                 let manifest = mount.appendingPathComponent("manifest.json")
                 if let data = try? Data(contentsOf: manifest), let snap = try? JSON.decoder.decode(Snapshot.self, from: data) {
                     itemsById[id] = SnapshotListItem(id: snap.id, createdAt: snap.createdAt, totalFiles: snap.totalFiles, totalBytes: snap.totalBytes, sources: snap.sources)

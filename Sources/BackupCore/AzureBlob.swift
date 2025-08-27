@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // MARK: - Azure Blob Storage (SAS) minimal client
 // This client supports basic operations needed by our cloud repository:
@@ -31,24 +32,39 @@ public struct AzureBlobClient {
     }
 
     // MARK: - Upload
-    // Upload a local file as a block blob. Uses single PUT for <= 8 MiB, else chunked blocks (8 MiB each).
-    public func uploadFile(localURL: URL, toBlobPath blobPath: String, chunkSize: Int = 8 * 1024 * 1024) throws {
+    // Upload a local file as a block blob.
+    // Sizing rules:
+    // - If the file size is <= chunkSize (default 8 MiB), use a single Put Blob request.
+    // - If the file size is > chunkSize, stream the upload via Put Block/Put Block List using blocks of size `chunkSize`.
+    //   The last block may be smaller.
+    // Integrity:
+    // - For single PUT we compute MD5 over the whole payload and set both Content-MD5 and x-ms-blob-content-md5.
+    // - For chunked uploads we compute an MD5 over the concatenated block data and set x-ms-blob-content-md5 at commit time.
+    // Progress:
+    // - Optional `progress` callback receives short textual status like "PUT chunked start ...", "PUT block i/N (...)".
+    public func uploadFile(localURL: URL, toBlobPath blobPath: String, chunkSize: Int = 8 * 1024 * 1024, progress: ((String) -> Void)? = nil) throws {
         let attr = try FileManager.default.attributesOfItem(atPath: localURL.path)
         let size = (attr[.size] as? NSNumber)?.intValue ?? 0
         if size <= chunkSize {
-            try putBlob(localURL: localURL, toBlobPath: blobPath)
+            try putBlob(localURL: localURL, toBlobPath: blobPath, progress: progress)
         } else {
-            try putBlobChunked(localURL: localURL, toBlobPath: blobPath, chunkSize: chunkSize)
+            try putBlobChunked(localURL: localURL, toBlobPath: blobPath, chunkSize: chunkSize, totalSize: size, progress: progress)
         }
     }
 
-    private func putBlob(localURL: URL, toBlobPath blobPath: String) throws {
+    private func putBlob(localURL: URL, toBlobPath blobPath: String, progress: ((String) -> Void)? = nil) throws {
         var req = URLRequest(url: makeBlobURL(path: blobPath))
         req.httpMethod = "PUT"
         req.setValue("BlockBlob", forHTTPHeaderField: "x-ms-blob-type")
         req.setValue(apiVersion, forHTTPHeaderField: "x-ms-version")
         let data = try Data(contentsOf: localURL)
+        // Compute MD5 and set as both integrity header and blob property so it can be verified later.
+        let digest = Insecure.MD5.hash(data: data)
+        let md5Base64 = Data(digest).base64EncodedString()
+        req.setValue(md5Base64, forHTTPHeaderField: "x-ms-blob-content-md5")
+        req.setValue(md5Base64, forHTTPHeaderField: "Content-MD5")
         req.httpBody = data
+        progress?("PUT blob size \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))")
         let (resp, err) = performSync(request: req)
         if let err = err { throw err }
         guard let http = resp as? HTTPURLResponse, (200...201).contains(http.statusCode) else {
@@ -56,21 +72,32 @@ public struct AzureBlobClient {
         }
     }
 
-    private func putBlobChunked(localURL: URL, toBlobPath blobPath: String, chunkSize: Int) throws {
+    private func putBlobChunked(localURL: URL, toBlobPath blobPath: String, chunkSize: Int, totalSize: Int, progress: ((String) -> Void)? = nil) throws {
+        // Note: chunkSize defaults to 8 MiB which balances memory footprint and request size.
+        // Adjust callers if you need larger blocks; the code does not currently vary chunkSize dynamically.
+        let totalBlocks = Int(ceil(Double(totalSize) / Double(chunkSize)))
         let handle = try FileHandle(forReadingFrom: localURL)
         defer { try? handle.close() }
         var blockIds: [String] = []
         var index = 0
+        var hasher = Insecure.MD5()
+        progress?("PUT chunked start \(totalBlocks) blocks @ \(ByteCountFormatter.string(fromByteCount: Int64(chunkSize), countStyle: .file)) each (last may be smaller)")
         while true {
             let data = handle.readData(ofLength: chunkSize)
             if data.isEmpty { break }
             let rawId = String(format: "%06d", index)
             let blockId = Data(rawId.utf8).base64EncodedString()
             try putBlock(blobPath: blobPath, blockId: blockId, data: data)
+            hasher.update(data: data)
             blockIds.append(blockId)
+            progress?("PUT block \(index + 1)/\(totalBlocks) (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)))")
             index += 1
         }
-        try putBlockList(blobPath: blobPath, blockIds: blockIds)
+        let md5 = hasher.finalize()
+        let md5Base64 = Data(md5).base64EncodedString()
+    progress?("PUT block list commit")
+        try putBlockList(blobPath: blobPath, blockIds: blockIds, blobContentMD5Base64: md5Base64)
+        progress?("PUT complete")
     }
 
     private func putBlock(blobPath: String, blockId: String, data: Data) throws {
@@ -90,7 +117,7 @@ public struct AzureBlobClient {
         }
     }
 
-    private func putBlockList(blobPath: String, blockIds: [String]) throws {
+    private func putBlockList(blobPath: String, blockIds: [String], blobContentMD5Base64: String) throws {
         var url = makeBlobURL(path: blobPath)
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         let existing = comps.percentEncodedQuery.map { $0 + "&" } ?? ""
@@ -99,6 +126,8 @@ public struct AzureBlobClient {
         var req = URLRequest(url: url)
         req.httpMethod = "PUT"
         req.setValue(apiVersion, forHTTPHeaderField: "x-ms-version")
+        // Set the MD5 for the committed blob so it can be verified via HEAD/GET later.
+        req.setValue(blobContentMD5Base64, forHTTPHeaderField: "x-ms-blob-content-md5")
         req.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         let xml = """
         <?xml version=\"1.0\" encoding=\"utf-8\"?>
@@ -208,6 +237,16 @@ public struct AzureBlobClient {
         return false
     }
 
+    // HEAD the blob and return response headers for verification.
+    public func headMetadata(blobPath: String) throws -> HTTPURLResponse? {
+        var req = URLRequest(url: makeBlobURL(path: blobPath))
+        req.httpMethod = "HEAD"
+        req.setValue(apiVersion, forHTTPHeaderField: "x-ms-version")
+        let (resp, err) = performSync(request: req)
+        if let err = err { throw err }
+        return resp as? HTTPURLResponse
+    }
+
     // MARK: - Helpers
     private func performSync(request: URLRequest) -> (URLResponse?, Error?) {
         let sem = DispatchSemaphore(value: 1)
@@ -271,6 +310,29 @@ public enum AzureError: Error, LocalizedError {
 
 // MARK: - Cloud repository operations via Azure Blob
 public extension BackupManager {
+    // Compute file MD5 (base64) for verification
+    static func fileMD5Base64(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = Insecure.MD5()
+        while true {
+            let data = handle.readData(ofLength: 8 * 1024 * 1024)
+            if data.isEmpty { break }
+            hasher.update(data: data)
+        }
+        let digest = hasher.finalize()
+        return Data(digest).base64EncodedString()
+    }
+
+    // Read Content-MD5 or x-ms-blob-content-md5 from Azure via HEAD
+    private static func fetchBlobMD5Base64(client: AzureBlobClient, blobPath: String) throws -> String? {
+        if let head = try client.headMetadata(blobPath: blobPath) {
+            // Azure may return either header depending on API/version
+            if let v = head.value(forHTTPHeaderField: "Content-MD5"), !v.isEmpty { return v }
+            if let v = head.value(forHTTPHeaderField: "x-ms-blob-content-md5"), !v.isEmpty { return v }
+        }
+        return nil
+    }
     /// Initialize a cloud repo by writing a config.json at the container root.
     func initAzureRepo(containerSASURL: URL) throws {
     Logger.shared.info("initAzureRepo", subsystem: "core.azure")
@@ -291,7 +353,7 @@ public extension BackupManager {
         if !ok { throw BackupError.repoNotInitialized(containerSASURL) }
     }
 
-    /// Backup sources to Azure by staging into a 1 MB sparse disk image, then uploading the image under snapshots/<id>/<id>.sparseimage and manifest.json alongside.
+    /// Backup sources to Azure by staging into a sparse disk image, then uploading the image under snapshots/<id>/<id>.sparseimage and manifest.json alongside.
     func backupToAzure(sources: [URL], containerSASURL: URL, options: BackupOptions = BackupOptions(), progress: ((BackupProgress) -> Void)? = nil) throws -> Snapshot {
         try ensureAzureRepoInitialized(containerSASURL)
         let client = AzureBlobClient(containerSASURL: containerSASURL)
@@ -323,7 +385,7 @@ public extension BackupManager {
         var totalBytes: Int64 = 0
         var symlinks: [String: String] = [:] // relPath -> destination
 
-        // Plan tasks by enumerating sources; we'll size the sparse image based on totalBytes
+    // Plan tasks by enumerating sources; we'll size the sparse image based on totalBytes
         for src in validSources {
             let enumerator = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey], options: [.skipsHiddenFiles])
             while let item = enumerator?.nextObject() as? URL {
@@ -351,10 +413,23 @@ public extension BackupManager {
             }
         }
 
-        // Create and attach the sparse image sized with headroom; then stage the files
-        let tmpRoot = URL(fileURLWithPath: NSTemporaryDirectory())
-        let imageURL = tmpRoot.appendingPathComponent("bckp-\(snapshotId).sparseimage")
-        let mountPoint = tmpRoot.appendingPathComponent("bckp-mount-\(snapshotId)", isDirectory: true)
+        // Emit planning summary
+        if let cb = progress {
+            cb(BackupProgress(
+                processedFiles: 0,
+                totalFiles: totalFiles,
+                processedBytes: 0,
+                totalBytes: totalBytes,
+                currentPath: "[plan] files=\(totalFiles) size=\(totalBytes)"
+            ))
+        }
+
+    // Create and attach the sparse image sized with headroom; then stage the files under ~/Backups
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let backupsRoot = home.appendingPathComponent("Backups", isDirectory: true)
+    try FileManager.default.createDirectory(at: backupsRoot, withIntermediateDirectories: true)
+    let imageURL = backupsRoot.appendingPathComponent("bckp-\(snapshotId).sparseimage")
+    let mountPoint = backupsRoot.appendingPathComponent("bckp-mount-\(snapshotId)", isDirectory: true)
     let headroomBytes = max(Int64(64 * 1024 * 1024), Int64(Double(totalBytes) * 0.5))
     var capacity = max(Int64(1 * 1024 * 1024), totalBytes + headroomBytes)
     let eightMiB: Int64 = 8 * 1024 * 1024
@@ -362,11 +437,24 @@ public extension BackupManager {
     let mib = (capacity + 1024 * 1024 - 1) / (1024 * 1024)
         let sizeArg = "\(mib)m"
         try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)")
-        let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: mountPoint)
-        defer { try? DiskImage.detach(device: device) }
+        if let cb = progress {
+            cb(BackupProgress(processedFiles: 0, totalFiles: totalFiles, processedBytes: 0, totalBytes: totalBytes, currentPath: "[disk] created sparse image \(imageURL.lastPathComponent) size=\(sizeArg)"))
+        }
+    let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: mountPoint)
+        if let cb = progress {
+            cb(BackupProgress(processedFiles: 0, totalFiles: totalFiles, processedBytes: 0, totalBytes: totalBytes, currentPath: "[disk] attached \(device) at \(mountPoint.path)"))
+        }
+    defer { try? DiskImage.detach(device: device, mountPoint: mountPoint) }
         let dataRoot = mountPoint.appendingPathComponent("data", isDirectory: true)
         try fm.createDirectory(at: dataRoot, withIntermediateDirectories: true)
 
+        // Copy files into the mounted image with per-item progress
+        // Emit a high-level stage line so CLI users see activity without file spam
+        if let cb = progress {
+            cb(BackupProgress(processedFiles: 0, totalFiles: totalFiles, processedBytes: 0, totalBytes: totalBytes, currentPath: "[data] copying data..."))
+        }
+        var processedFiles = 0
+        var processedBytes: Int64 = 0
         for t in tasks {
             switch t.kind {
             case .file:
@@ -374,6 +462,16 @@ public extension BackupManager {
                 try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? fm.removeItem(at: dst)
                 try fm.copyItem(at: t.src, to: dst)
+                // Update progress
+                if let size = (try? t.src.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap({ Int64($0) }) {
+                    processedFiles += 1
+                    processedBytes += size
+                } else {
+                    processedFiles += 1
+                }
+                if let cb = progress {
+                    cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: t.relPath))
+                }
             case .symlink:
                 let dst = dataRoot.appendingPathComponent(t.top, isDirectory: true).appendingPathComponent(t.relPath)
                 try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -381,7 +479,14 @@ public extension BackupManager {
                 if !dest.isEmpty {
                     try? fm.createSymbolicLink(atPath: dst.path, withDestinationPath: dest)
                 }
+                if let cb = progress {
+                    cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: t.relPath))
+                }
             }
+        }
+        // High-level stage completion
+        if let cb = progress {
+            cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[data] staging complete"))
         }
 
         // No per-file uploads: we staged locally into a sparse image; we'll upload it in one go below.
@@ -393,20 +498,48 @@ public extension BackupManager {
         let manifestURL = mountPoint.appendingPathComponent("manifest.json")
         try manifestData.write(to: manifestURL, options: [.atomic])
         // Ensure data is flushed by detaching before upload
-        try DiskImage.detach(device: device)
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[disk] detaching")) }
+        try DiskImage.detach(device: device, mountPoint: mountPoint)
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[disk] detached")) }
+        // Compute MD5 (base64) for verification and emit progress line with checksum
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[hash] computing MD5")) }
+        let md5Base64 = try Self.fileMD5Base64(of: imageURL)
+        if let cb = progress {
+            cb(BackupProgress(
+                processedFiles: totalFiles,
+                totalFiles: totalFiles,
+                processedBytes: totalBytes,
+                totalBytes: totalBytes,
+                currentPath: "MD5 " + md5Base64
+            ))
+        }
         // Upload the sparse image
-    try client.uploadFile(localURL: imageURL, toBlobPath: basePrefix + "/\(snapshotId).sparseimage")
-    // Cleanup local staging artifacts
-    try? FileManager.default.removeItem(at: imageURL)
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[azure] upload start \(snapshotId).sparseimage")) }
+        try client.uploadFile(localURL: imageURL, toBlobPath: basePrefix + "/\(snapshotId).sparseimage", progress: { msg in
+            if let cb = progress {
+                cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[azure] " + msg))
+            }
+        })
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[azure] upload done")) }
+        // Verify: compare local MD5 (base64) with blob's Content-MD5/x-ms-blob-content-md5
+        if let remoteMD5 = try? Self.fetchBlobMD5Base64(client: client, blobPath: basePrefix + "/\(snapshotId).sparseimage"), !remoteMD5.isEmpty {
+            if remoteMD5 != md5Base64 { throw AzureError.uploadFailed(status: -1, path: basePrefix + "/\(snapshotId).sparseimage") }
+        }
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[azure] verified MD5")) }
+        // Cleanup local staging artifacts
+        try? FileManager.default.removeItem(at: imageURL)
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[cleanup] removed local image")) }
         // Also upload manifest.json alongside for quick listing without mounting
         let tmpManifest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-manifest-\(snapshotId).json")
         try manifestData.write(to: tmpManifest, options: [.atomic])
+        if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[azure] upload manifest.json")) }
         try client.uploadFile(localURL: tmpManifest, toBlobPath: basePrefix + "/manifest.json")
         // Optionally upload symlinks.json derived from the staging step
         if !symlinks.isEmpty {
             let data = try JSONSerialization.data(withJSONObject: symlinks, options: [.prettyPrinted, .sortedKeys])
             let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bckp-symlinks-\(snapshotId).json")
             try data.write(to: tmp, options: [.atomic])
+            if let cb = progress { cb(BackupProgress(processedFiles: processedFiles, totalFiles: totalFiles, processedBytes: processedBytes, totalBytes: totalBytes, currentPath: "[azure] upload symlinks.json")) }
             try client.uploadFile(localURL: tmp, toBlobPath: basePrefix + "/symlinks.json")
         }
         Logger.shared.info("azure backup finished id=\(snapshotId) files=\(totalFiles) bytes=\(totalBytes)", subsystem: "core.azure")
@@ -449,13 +582,18 @@ public extension BackupManager {
         // If an image exists, prefer mounting the image and copying locally. Otherwise, fall back to per-file download.
         let imageBlobPath = "snapshots/\(snapshotId)/\(snapshotId).sparseimage"
         if (try? client.exists(blobPath: imageBlobPath)) == true {
-            let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            let localImage = tmp.appendingPathComponent("bckp-restore-\(snapshotId).sparseimage")
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let backupsRoot = home.appendingPathComponent("Backups", isDirectory: true)
+            try FileManager.default.createDirectory(at: backupsRoot, withIntermediateDirectories: true)
+            let localImage = backupsRoot.appendingPathComponent("bckp-restore-\(snapshotId).sparseimage")
             try client.download(to: localImage, blobPath: imageBlobPath)
             // Attach and copy data/
-            let mountPoint = tmp.appendingPathComponent("bckp-restore-mount-\(snapshotId)", isDirectory: true)
+            let mountPoint = backupsRoot.appendingPathComponent("bckp-restore-mount-\(snapshotId)", isDirectory: true)
             let (dev, _) = try DiskImage.attach(imageURL: localImage, mountpoint: mountPoint)
-            defer { try? DiskImage.detach(device: dev) }
+            defer {
+                try? DiskImage.detach(device: dev, mountPoint: mountPoint)
+                try? FileManager.default.removeItem(at: localImage)
+            }
             let dataRoot = mountPoint.appendingPathComponent("data", isDirectory: true)
             try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
             let enumerator = FileManager.default.enumerator(at: dataRoot, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey], options: [])
