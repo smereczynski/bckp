@@ -318,6 +318,57 @@ Azure upload block size
 - For small images (≤ 8 MiB) the upload uses a single Put Blob request.
 - For larger images the upload streams using Azure Block Blob with 8‑MiB blocks (Put Block/Put Block List). The last block may be smaller. An MD5 over the full image is set and then verified after upload before local cleanup.
 
+## Encrypted staging (macOS certificate-based)
+
+You can encrypt the APFS sparse image used for staging with one or more macOS Keychain certificates. This uses native `hdiutil` public‑key encryption (AES‑256 for the image, data key encrypted to each recipient certificate), so backups can be created without holding any private keys locally. Decryption requires the matching private key on the restore machine.
+
+Supported selector formats when choosing recipients:
+- `sha1:HEX` — certificate fingerprint (DER SHA‑1)
+- `cn:Common Name` — subject common name
+- `label:Keychain Label` — exact keychain item label
+
+Configure once in `~/.config/bckp/config` (or repo‑local `bckp.config`):
+
+```
+[encryption]
+mode = certificate
+recipients = sha1:AB12CD34EF..., cn:Your Name
+```
+
+Or provide flags per run:
+
+```zsh
+bckp backup --source ~/Documents \
+  --encryption-mode certificate \
+  --recipient sha1:AB12CD... \
+  --recipient cn:"Your Name" \
+  --progress
+
+bckp backup-azure --source ~/Documents --sas "https://...sig=..." \
+  --encryption-mode certificate \
+  --recipient label:"Backup Cert"
+```
+
+Operational procedure after enabling encryption:
+1) Prepare a certificate and private key
+  - Create an RSA/ECDSA keypair and a certificate (self‑signed or CA‑issued) for backup encryption.
+  - Import the certificate (public) into the login keychain on the backup machine. If you also import the private key, protect it with Keychain ACL as desired.
+  - Import the matching private key into the restore machine's keychain. iCloud Keychain sync is supported if enabled.
+2) Configure bckp to use the certificate
+  - Add the certificate selector(s) to the config as above, or supply with `--recipient` flags.
+  - Verify detection without running a large backup: run with `--progress` and check `[disk] created … enc=certificate`.
+3) Create backups as usual
+  - Local: `bckp backup --source …` stages into an encrypted `.sparseimage` and stores it in the repo.
+  - Azure: `bckp backup-azure --source … --sas …` uploads the encrypted `.sparseimage`. MD5 verification applies to the encrypted blob.
+4) Restore on a machine with the private key present
+  - Local restore: `hdiutil attach` prompts Keychain to access the decryption key. Approve the prompt or pre‑authorize via Keychain Access.
+  - Cloud restore: downloads the encrypted image and attaches the same way; after mount, files are copied out.
+
+Tips:
+- If you see a Keychain prompt during attach, choose "Always Allow" for the `bckp` binary to reduce future prompts.
+- To rotate certificates, list multiple recipients temporarily (old + new) in config; new snapshots will be decryptable by either key. After migration, remove the old recipient.
+- Ensure your certificate allows key encipherment; a standard RSA keypair works well.
+
 ## Repository usage tracking (repositories.json)
 The tool tracks "which repos you use" and "when each source path was last backed up" to help future UI/automation.
 

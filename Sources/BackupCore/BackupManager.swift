@@ -137,7 +137,7 @@ public final class BackupManager {
     capacity = ((capacity + eightMiB - 1) / eightMiB) * eightMiB
     let mib = (capacity + 1024 * 1024 - 1) / (1024 * 1024)
     let sizeArg = "\(mib)m"
-    try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)")
+    try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)", encryption: options.encryption)
     // Mount under ~/Backups instead of system temp to keep paths predictable
     let home = FileManager.default.homeDirectoryForCurrentUser
     let backupsRoot = home.appendingPathComponent("Backups", isDirectory: true)

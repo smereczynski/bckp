@@ -82,6 +82,12 @@ extension Bckp {
     @Flag(name: .long, help: "Print progress while copying")
     var progress: Bool = false
 
+    @Option(name: .long, help: "Staging encryption mode: none | certificate")
+    var encryptionMode: String?
+
+    @Option(name: .long, parsing: .upToNextOption, help: "Recipients for certificate mode (selectors: sha1:HEX, cn:Name, label:Label)")
+    var recipient: [String] = []
+
         func run() throws {
             guard !source.isEmpty else {
                 throw ValidationError("Provide at least one --source path")
@@ -90,9 +96,14 @@ extension Bckp {
                 let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
                 let repoURL = URL(fileURLWithPath: repo ?? cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             let sources = source.map { URL(fileURLWithPath: $0) }
+                let encModeStr = (encryptionMode ?? cfg.encryptionMode ?? "none").lowercased()
+                let encMode: EncryptionMode = (encModeStr == "certificate" ? .certificate : .none)
+                let recipients = recipient.isEmpty ? cfg.encryptionRecipients : recipient
+                let enc = EncryptionSettings(mode: encMode, recipients: recipients)
                 let opts = BackupOptions(include: include.isEmpty ? cfg.include : include,
                                          exclude: exclude.isEmpty ? cfg.exclude : exclude,
-                                         concurrency: concurrency ?? cfg.concurrency)
+                                         concurrency: concurrency ?? cfg.concurrency,
+                                         encryption: encMode == .none ? nil : enc)
             RepositoriesConfigStore.shared.updateConfiguredSourcesLocal(repoURL: repoURL, sources: sources)
             var lastMD5: String?
             let snap = try manager.backup(sources: sources, to: repoURL, options: opts, progress: progress ? { p in
@@ -242,14 +253,25 @@ extension Bckp {
         @Flag(name: .long, help: "Print progress while uploading")
         var progress: Bool = false
 
+    @Option(name: .long, help: "Staging encryption mode: none | certificate")
+    var encryptionMode: String?
+
+    @Option(name: .long, parsing: .upToNextOption, help: "Recipients for certificate mode (selectors: sha1:HEX, cn:Name, label:Label)")
+    var recipient: [String] = []
+
         func run() throws {
             guard !source.isEmpty else { throw ValidationError("Provide at least one --source path") }
             let manager = BackupManager()
             let cfg = AppConfigIO.load(from: AppConfig.defaultRepoConfigURL)
             let sources = source.map { URL(fileURLWithPath: $0) }
+                let encModeStr = (encryptionMode ?? cfg.encryptionMode ?? "none").lowercased()
+                let encMode: EncryptionMode = (encModeStr == "certificate" ? .certificate : .none)
+                let recipients = recipient.isEmpty ? cfg.encryptionRecipients : recipient
+                let enc = EncryptionSettings(mode: encMode, recipients: recipients)
                 let opts = BackupOptions(include: include.isEmpty ? cfg.include : include,
                                          exclude: exclude.isEmpty ? cfg.exclude : exclude,
-                                         concurrency: concurrency ?? cfg.concurrency)
+                                         concurrency: concurrency ?? cfg.concurrency,
+                                         encryption: encMode == .none ? nil : enc)
                 let sasURL = URL(string: sas ?? cfg.azureSAS ?? "")
                 guard let sasURL else { throw ValidationError("Provide --sas or set [azure] sas in config") }
                 RepositoriesConfigStore.shared.updateConfiguredSourcesAzure(containerSASURL: sasURL, sources: sources)
