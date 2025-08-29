@@ -46,6 +46,16 @@ swift run bckp --help    # show commands
 swift test               # run tests (requires full Xcode SDKs)
 ```
 
+### Test coverage (SwiftPM)
+- Generate LCOV (and optional HTML if genhtml is installed):
+  ```bash
+  bash scripts/swiftpm-coverage.sh         # writes .coverage/coverage.lcov
+  bash scripts/swiftpm-coverage.sh --open  # if genhtml is available, open HTML report
+  ```
+- Notes:
+  - The script tolerates llvm-profdata/show mismatches across Xcode versions and will still produce LCOV.
+  - CI runs this via a GitHub Actions workflow and uploads LCOV (and HTML if present).
+
 ### Run the GUI (SwiftUI app)
 > [!WARNING]  
 > GUI is in heavy development and should NOT be considered as usable yet!

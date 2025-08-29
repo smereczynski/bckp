@@ -97,3 +97,10 @@ The project embeds a version string at build time and automates releases via Git
 - Tests: `EncryptionInitializerTests` may try to add XCTest as a trusted application (best‑effort with multiple possible paths) to avoid prompts on CI. If your CI environment still prompts, ensure the test runner binary path is allowed in Keychain or skip the test.
 - Focused runs: to iterate quickly on encryption, use:
   - `swift test --filter EncryptionInitializerTests`
+
+## 6. Code coverage
+
+- SwiftPM: `swift test --enable-code-coverage` generates profiling data under `.build`.
+- Export an lcov + optional HTML report:
+  - `scripts/swiftpm-coverage.sh` (writes `.coverage/coverage.lcov`)
+  - `scripts/swiftpm-coverage.sh --open` (requires `genhtml` from lcov)

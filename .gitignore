@@ -13,3 +13,6 @@ DerivedData/
 # bckp config (user-specific)
 bckp.config
 .config/bckp/config
+
+# Coverage artifacts
+.coverage/
