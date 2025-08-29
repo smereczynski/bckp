@@ -1,0 +1,33 @@
+name: test-coverage
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Generate coverage (SwiftPM)
+        run: bash scripts/swiftpm-coverage.sh
+
+      - name: Upload LCOV
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: .coverage/coverage.lcov
+          if-no-files-found: error
+
+      - name: Upload HTML report (if present)
+        if: ${{ hashFiles('.coverage/html/index.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: .coverage/html
+          if-no-files-found: ignore
