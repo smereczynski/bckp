@@ -16,6 +16,9 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
+      - name: Install lcov (genhtml)
+        run: brew install lcov
+
       - name: Generate coverage (SwiftPM)
         run: bash scripts/swiftpm-coverage.sh
 
