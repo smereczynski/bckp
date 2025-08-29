@@ -46,6 +46,18 @@ swift run bckp --help    # show commands
 swift test               # run tests (requires full Xcode SDKs)
 ```
 
+### Test coverage (local)
+You can generate coverage using SwiftPM and export an lcov report:
+
+```bash
+scripts/swiftpm-coverage.sh        # writes .coverage/coverage.lcov
+scripts/swiftpm-coverage.sh --open # also opens HTML if genhtml is installed
+```
+
+Notes:
+- Requires Xcode toolchain (llvm-cov via xcrun) and optionally lcov's genhtml for HTML output.
+- The script runs `swift test --enable-code-coverage`, locates the latest `.profdata`, and exports an lcov file.
+
 ### Run the GUI (SwiftUI app)
 > [!WARNING]  
 > GUI is in heavy development and should NOT be considered as usable yet!
