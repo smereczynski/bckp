@@ -40,6 +40,28 @@ public struct RepoConfig: Codable, Equatable {
 
 // MARK: - Options
 
+/// Encryption modes for staging artifacts (e.g., sparse disk images)
+public enum EncryptionMode: String, Equatable {
+    case none
+    case certificate // public-key encryption using Keychain certificates
+}
+
+/// Encryption settings configured by the user.
+/// When mode == .certificate, recipients contains one or more selectors resolving to Keychain certificates.
+/// Selector formats supported (case-insensitive prefixes):
+/// - "sha1:<HEX>" certificate fingerprint
+/// - "cn:<Common Name>" subject summary/common name
+/// - "label:<Keychain Label>" item label
+public struct EncryptionSettings: Equatable {
+    public var mode: EncryptionMode
+    public var recipients: [String]
+
+    public init(mode: EncryptionMode = .none, recipients: [String] = []) {
+        self.mode = mode
+        self.recipients = recipients
+    }
+}
+
 /// Options that control what gets included in a backup.
 /// Think of this as a "configuration struct" that you pass into the engine.
 public struct BackupOptions: Equatable {
@@ -50,11 +72,14 @@ public struct BackupOptions: Equatable {
     public var exclude: [String]
     /// Max number of concurrent copy operations. If nil, we use the machine's CPU count.
     public var concurrency: Int?
+    /// Optional encryption settings for staging artifacts.
+    public var encryption: EncryptionSettings?
 
-    public init(include: [String] = [], exclude: [String] = [], concurrency: Int? = nil) {
+    public init(include: [String] = [], exclude: [String] = [], concurrency: Int? = nil, encryption: EncryptionSettings? = nil) {
         self.include = include
         self.exclude = exclude
         self.concurrency = concurrency
+        self.encryption = encryption
     }
 }
 

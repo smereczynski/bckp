@@ -436,9 +436,11 @@ public extension BackupManager {
     capacity = ((capacity + eightMiB - 1) / eightMiB) * eightMiB
     let mib = (capacity + 1024 * 1024 - 1) / (1024 * 1024)
         let sizeArg = "\(mib)m"
-        try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)")
+        try DiskImage.createSparseImage(at: imageURL, size: sizeArg, volumeName: "bckp-\(snapshotId)", encryption: options.encryption)
         if let cb = progress {
-            cb(BackupProgress(processedFiles: 0, totalFiles: totalFiles, processedBytes: 0, totalBytes: totalBytes, currentPath: "[disk] created sparse image \(imageURL.lastPathComponent) size=\(sizeArg)"))
+            let enc = options.encryption?.mode ?? .none
+            let encDesc = (enc == .none ? "plain" : "certificate")
+            cb(BackupProgress(processedFiles: 0, totalFiles: totalFiles, processedBytes: 0, totalBytes: totalBytes, currentPath: "[disk] created sparse image \(imageURL.lastPathComponent) size=\(sizeArg) enc=\(encDesc)"))
         }
     let (device, _) = try DiskImage.attach(imageURL: imageURL, mountpoint: mountPoint)
         if let cb = progress {

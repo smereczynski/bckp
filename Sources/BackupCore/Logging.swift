@@ -43,12 +43,8 @@ public final class FileLogSink: LogSink {
     }
 
     public static func defaultLogsDirectory() -> URL {
-        #if os(macOS)
         let lib = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
         return lib.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent("bckp", isDirectory: true)
-        #else
-        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("bckp-logs", isDirectory: true)
-        #endif
     }
 
     private func fileURL(for date: Date) -> URL {

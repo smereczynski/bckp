@@ -47,9 +47,13 @@ struct DiskImage {
         return out.fileHandleForReading.readDataToEndOfFile()
     }
 
-    static func createSparseImage(at url: URL, size: String, volumeName: String, fileSystem: String = "APFS", type: String = "SPARSE") throws {
-        // hdiutil create -type SPARSE -fs APFS -volname <name> -size <size> <path>
-    let args = ["create", "-type", type, "-fs", fileSystem, "-volname", volumeName, "-size", size, url.path]
+    static func createSparseImage(at url: URL, size: String, volumeName: String, fileSystem: String = "APFS", type: String = "SPARSE", encryption: EncryptionSettings? = nil) throws {
+        // hdiutil create -type SPARSE -fs APFS -volname <name> [-encryption AES-256 -certificate <der> ...] -size <size> <path>
+        let (encArgs, cleanup) = try DiskImageEncryptionArgs.build(for: encryption)
+        defer { cleanup() }
+        var args = ["create", "-type", type, "-fs", fileSystem, "-volname", volumeName]
+        args.append(contentsOf: encArgs)
+        args.append(contentsOf: ["-size", size, url.path])
         _ = try runHdiutil(args)
     }
 

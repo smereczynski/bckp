@@ -1,7 +1,6 @@
 import XCTest
 @testable import BackupCore
 
-#if os(macOS)
 final class ExternalDiskTests: XCTestCase {
     func testExternalDiskIdentityAndKeyNormalization() throws {
         // Discover external/removable volumes.
@@ -36,4 +35,3 @@ final class ExternalDiskTests: XCTestCase {
         }
     }
 }
-#endif

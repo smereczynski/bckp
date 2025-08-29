@@ -58,8 +58,7 @@ struct JSON {
     }()
 }
 
-// MARK: - Disk Identification (macOS)
-#if os(macOS)
+// MARK: - Disk Identification
 public struct DiskIdentity: Codable, Equatable {
     // e.g., disk2s1 (intentionally not resolved in this lightweight impl)
     public let deviceBSDName: String?
@@ -131,7 +130,6 @@ public func listExternalDiskIdentities() -> [DiskIdentity] {
         return DiskIdentity(deviceBSDName: bsd, volumeUUID: uuid, volumeURL: vol, isExternal: true)
     }
 }
-#endif
 
 // MARK: - Glob Match
 // A tiny glob matcher supporting '*', '**' across path components.

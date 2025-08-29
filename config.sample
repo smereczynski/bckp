@@ -19,3 +19,14 @@ concurrency = 0
 [azure]
 # Azure Blob Storage container SAS URL (keep this secret!)
 sas = 
+
+[logging]
+# Enable debug-level logging (true/false)
+debug = false
+
+[encryption]
+# Encryption mode for staging: none | certificate
+mode = none
+# When mode=certificate, provide one or more recipients (selectors), comma-separated.
+# Selectors support: sha1:HEX, cn:Common Name, label:Keychain Label
+recipients = 

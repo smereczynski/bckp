@@ -21,14 +21,21 @@ public struct AppConfig: Equatable {
     // Logging
     // If true, enables debug-level logging. Defaults to false when omitted.
     public var loggingDebug: Bool?
+    // Encryption
+    // mode: none|certificate
+    // recipients: comma-separated selectors when mode=certificate
+    public var encryptionMode: String?
+    public var encryptionRecipients: [String] = []
 
-    public init(repoPath: String? = nil, include: [String] = [], exclude: [String] = [], concurrency: Int? = nil, azureSAS: String? = nil, loggingDebug: Bool? = nil) {
+    public init(repoPath: String? = nil, include: [String] = [], exclude: [String] = [], concurrency: Int? = nil, azureSAS: String? = nil, loggingDebug: Bool? = nil, encryptionMode: String? = nil, encryptionRecipients: [String] = []) {
         self.repoPath = repoPath
         self.include = include
         self.exclude = exclude
         self.concurrency = concurrency
         self.azureSAS = azureSAS
         self.loggingDebug = loggingDebug
+        self.encryptionMode = encryptionMode
+        self.encryptionRecipients = encryptionRecipients
     }
 
     // Default config file locations
@@ -76,6 +83,10 @@ public enum AppConfigIO {
             let v = dbg.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             cfg.loggingDebug = (v == "1" || v == "true" || v == "yes" || v == "on")
         }
+        if let em = table["encryption"]?["mode"], !em.isEmpty { cfg.encryptionMode = em }
+        if let rec = table["encryption"]?["recipients"], !rec.isEmpty {
+            cfg.encryptionRecipients = rec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        }
         return cfg
     }
 
@@ -103,6 +114,13 @@ public enum AppConfigIO {
     lines.append("[logging]")
     lines.append("# Enable debug-level logging (true/false)")
     lines.append("debug = \(cfg.loggingDebug == true ? "true" : "false")")
+    lines.append("")
+    lines.append("[encryption]")
+    lines.append("# Encryption mode for staging: none | certificate")
+    lines.append("mode = \(cfg.encryptionMode ?? "none")")
+    lines.append("# When mode=certificate, provide one or more recipients (selectors), comma-separated.")
+    lines.append("# Selectors support: sha1:<HEX>, cn:<Common Name>, label:<Keychain Label>")
+    lines.append("recipients = \(cfg.encryptionRecipients.joined(separator: ", "))")
         let text = lines.joined(separator: "\n") + "\n"
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.data(using: .utf8)!.write(to: url, options: Data.WritingOptions.atomic)
