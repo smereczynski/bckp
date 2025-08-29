@@ -762,7 +762,6 @@ private struct ExternalDrivePickerView: View {
     }
 
     private func loadDrives() {
-        #if os(macOS)
         let items = listExternalDiskIdentities()
         self.drives = items.map { ident in
             let name = ident.volumeURL.lastPathComponent
@@ -771,9 +770,6 @@ private struct ExternalDrivePickerView: View {
                          mountPath: ident.volumeURL.path)
         }
         if let first = drives.first { selected = first }
-        #else
-        self.drives = []
-        #endif
     }
 }
 

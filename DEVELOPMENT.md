@@ -89,3 +89,11 @@ The project embeds a version string at build time and automates releases via Git
   - Code signing and notarization for `.app` and binaries.
   - Homebrew tap for `bckp` CLI.
   - Changelog automation.
+
+## 5. Keychain, encryption, and CI
+
+- The encryption feature generates an RSA‑4096 key and a self‑signed certificate using swift‑certificates and stores them in the login keychain. The key is created with an ACL that trusts `/usr/bin/hdiutil` and `diskimages-helper` to reduce prompts.
+- The ACL uses `SecAccessCreate` and `SecTrustedApplicationCreateFromPath`, which are deprecated APIs in the Keychain stack but remain functional. They are currently used to provide a prompt‑free experience for automated backups and tests. We will revisit this if a modern alternative becomes available.
+- Tests: `EncryptionInitializerTests` may try to add XCTest as a trusted application (best‑effort with multiple possible paths) to avoid prompts on CI. If your CI environment still prompts, ensure the test runner binary path is allowed in Keychain or skip the test.
+- Focused runs: to iterate quickly on encryption, use:
+  - `swift test --filter EncryptionInitializerTests`

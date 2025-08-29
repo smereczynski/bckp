@@ -18,10 +18,10 @@ A simple, native macOS backup tool (CLI + SwiftUI app) written in Swift. Creates
 - Cloud repository (optional): Azure Blob Storage via SAS URL
 - Repository usage tracking: persists last-used per repository and last-backup per source path
 - GUI Repositories panel: browse repositories.json with filter, sort, live auto-refresh, and “Open JSON”
-- CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json)
- - CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json), plus `--clear` to reset the index
+- CLI “repos” subcommand to inspect repositories.json (tab-separated rows or --json), plus `--clear` to reset the index
 - External drives aware: on macOS, local repo keys include the external volume UUID when available, for stability across re-mounts
 - GUI external-drive picker (macOS): select an external volume, set a subpath, show the volume UUID and derived repositories.json key, and copy the key
+- Native macOS certificate-based encryption of APFS sparse images. Includes `bckp encryption init` to create an RSA‑4096 key and self‑signed certificate in your login keychain, with optional iCloud sync.
 
 Repository layout (snapshots now use APFS sparse disk images):
 ```
@@ -266,6 +266,9 @@ MD5 <base64>
 
 The final summary includes the MD5 when `--progress` is used.
 
+Notes:
+- To keep output concise, progress prints only stage tags (no per‑file listings) and a single `MD5 <base64>` line for integrity.
+
 - List Azure snapshots
 ```bash
 swift run bckp list-azure   # uses config SAS, or add --sas
@@ -354,6 +357,16 @@ Operational procedure after enabling encryption:
   - Create an RSA/ECDSA keypair and a certificate (self‑signed or CA‑issued) for backup encryption.
   - Import the certificate (public) into the login keychain on the backup machine. If you also import the private key, protect it with Keychain ACL as desired.
   - Import the matching private key into the restore machine's keychain. iCloud Keychain sync is supported if enabled.
+  - Or, generate a new RSA‑4096 key and a self‑signed certificate directly from bckp:
+    ```zsh
+    swift run bckp encryption init --cn "Your Name (bckp)" [--icloud-sync]
+    # Output includes the SHA‑1 fingerprint you can use as a selector:
+    # [encryption] generated RSA-4096 key + self-signed cert in login keychain
+    # [encryption] CN=Your Name (bckp) sha1:ab12cd34...
+    ```
+    Notes:
+    - The key is created in your login keychain with an ACL allowing hdiutil/diskimages-helper.
+    - The optional `--icloud-sync` flag requests iCloud Keychain sync (best‑effort; depends on system settings/entitlements).
 2) Configure bckp to use the certificate
   - Add the certificate selector(s) to the config as above, or supply with `--recipient` flags.
   - Verify detection without running a large backup: run with `--progress` and check `[disk] created … enc=certificate`.

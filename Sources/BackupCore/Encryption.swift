@@ -1,10 +1,6 @@
 import Foundation
-#if os(macOS)
 import Security
-#endif
-#if canImport(CryptoKit)
 import CryptoKit
-#endif
 
 // MARK: - Encryption Utilities
 // Resolve certificate selectors to DER blobs and build hdiutil args for certificate encryption.
@@ -13,14 +9,12 @@ public enum EncryptionError: Error, LocalizedError {
 	case certificateNotFound(String)
 	case noRecipients
 	case tempWriteFailed
-	case unsupportedPlatform
 
 	public var errorDescription: String? {
 		switch self {
 		case .certificateNotFound(let sel): return "Certificate not found for selector: \(sel)"
 		case .noRecipients: return "At least one certificate recipient is required"
 		case .tempWriteFailed: return "Failed to write temporary certificate file"
-		case .unsupportedPlatform: return "Certificate-based encryption is supported on macOS only"
 		}
 	}
 }
@@ -31,7 +25,6 @@ public struct CertificateResolver {
 	/// Given selectors like "sha1:ABCDEF...", "cn:Full Name", or "label:My Cert",
 	/// return an array of file URLs pointing to temporary DER-encoded certificate files suitable for `hdiutil -certificate`.
 	public func resolveToTempDERFiles(selectors: [String]) throws -> [URL] {
-		#if os(macOS)
 		guard !selectors.isEmpty else { throw EncryptionError.noRecipients }
 		var results: [URL] = []
 		for sel in selectors {
@@ -42,12 +35,8 @@ public struct CertificateResolver {
 			results.append(tmp)
 		}
 		return results
-		#else
-		throw EncryptionError.unsupportedPlatform
-		#endif
 	}
 
-	#if os(macOS)
 	private func findCertificate(selector: String) throws -> SecCertificate? {
 		let parts = selector.split(separator: ":", maxSplits: 1).map { String($0) }
 		let key = parts.first?.lowercased() ?? ""
@@ -63,12 +52,8 @@ public struct CertificateResolver {
 		guard status == errSecSuccess, let array = items as? [SecCertificate] else { return nil }
 
 		func sha1Hex(_ data: Data) -> String {
-			#if canImport(CryptoKit)
 			let digest = Insecure.SHA1.hash(data: data)
 			return digest.map { String(format: "%02x", $0) }.joined()
-			#else
-			return ""
-			#endif
 		}
 
 		// If label search requested, use a targeted query first
@@ -105,7 +90,6 @@ public struct CertificateResolver {
 		}
 		return nil
 	}
-	#endif
 }
 
 // Build hdiutil create arguments for encryption settings.

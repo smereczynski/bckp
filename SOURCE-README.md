@@ -7,6 +7,7 @@ This document explains how the code is organized, what each file does, and how p
   - `BackupCore` (library): all backup logic + Azure client + config types.
   - `bckp` (executable): CLI built with ArgumentParser (local + Azure subcommands).
   - `bckp-app` (executable): SwiftUI GUI that wraps BackupCore.
+  - Encryption helpers: native macOS Keychain integration for certificate‑based APFS image encryption.
 - Tests live under `Tests/` for core and optional Azure integration.
   - Additional macOS-only CLI integration test verifies external-drive listing JSON when enabled via `BCKP_RUN_CLI_TESTS=1`.
 
@@ -23,10 +24,12 @@ This document explains how the code is organized, what each file does, and how p
 │  │  ├─ Utilities.swift      # Errors, glob matching, JSON helpers, formatting
 │  │  │                       # + macOS disk identity helpers (external volumes & UUIDs)
 │  │  ├─ AzureBlob.swift      # Minimal Azure Blob client + BackupManager extension
+│  │  ├─ Encryption.swift     # hdiutil AES‑256 for APFS sparse images; recipient selection (sha1/cn/label)
+│  │  ├─ Keygen.swift         # RSA‑4096 keygen + self‑signed cert using swift‑certificates; Keychain ACL for hdiutil
 │  │  ├─ Config.swift         # AppConfig + AppConfigIO (INI-like) with [azure] sas
 │  │  └─ CloudProvider.swift  # Protocol for future cloud backends
 │  ├─ bckp-cli/
-│  │  └─ main.swift           # CLI entry point, local + Azure subcommands
+│  │  └─ main.swift           # CLI entry point, local + Azure subcommands; includes `encryption init`
 │  └─ bckp-app/
 │     ├─ App.swift            # SwiftUI app entry
 │     ├─ ContentView.swift    # GUI (repo, sources, config, cloud actions)
@@ -65,12 +68,14 @@ Minimal Azure Blob client + `BackupManager` extension for cloud repo operations.
 - ArgumentParser-based CLI with local and Azure subcommands.
 - Local: `init-repo`, `backup`, `restore`, `list`, `prune`.
 - Azure: `init-azure`, `backup-azure`, `list-azure`, `restore-azure`, `prune-azure`.
+- Encryption: `encryption init --cn "Name" [--icloud-sync]` creates RSA‑4096 key + self‑signed certificate in the login keychain and prints the DER SHA‑1 fingerprint for use as `sha1:...` recipient selector.
 - Repositories inspector: `repos` subcommand prints tab-separated rows or `--json`.
 - Size columns are in raw bytes (no unit suffix) for easy scripting.
 
 ### BackupCore/Config.swift
 - `AppConfig` and `AppConfigIO` load/save INI-like config.
 - Sections: [repo], [backup] (include/exclude/concurrency), [azure] (sas).
+ - Encryption (optional): [encryption] mode = certificate; recipients = comma‑separated selectors.
 
 ### BackupCore/CloudProvider.swift
 - `CloudProvider` protocol + AzureBlobProvider wrapper for future backends.
@@ -103,6 +108,11 @@ Minimal Azure Blob client + `BackupManager` extension for cloud repo operations.
 - `AzureIntegrationTests.swift`: loads SAS from `~/.config/bckp/config` and runs init/upload/list/restore if present; otherwise skips with a clear message.
 - `ExternalDiskTests.swift`: unit tests for macOS disk identity and key normalization; skips cleanly if no external drives are present.
 - `CLIDrivesIntegrationTests.swift`: optional macOS-only integration test; enabled by `BCKP_RUN_CLI_TESTS=1`. Runs the built `bckp` binary with `drives --json`, asserts the selected volume UUID is present, and times out after 20s with diagnostics to avoid hangs.
+ - `EncryptionInitializerTests.swift`: macOS‑only; generates an RSA‑4096 key + self‑signed certificate via `EncryptionInitializer.generateSelfSignedRSA`, verifies the DER SHA‑1 fingerprint, confirms identity presence, and cleans up Keychain items. Includes best‑effort ACL to suppress prompts during automated tests.
+
+## Security notes
+- The Keychain ACL configuration uses `SecAccess` and `SecTrustedApplication` for hdiutil/diskimages‑helper (deprecated but functional on macOS). This reduces prompts during encrypted image creation/attach. Future modernization may revisit this once Apple provides non‑deprecated replacements for trusted application ACLs.
+- The `--icloud-sync` flag sets `kSecAttrSynchronizable` best‑effort; success depends on user settings/entitlements.
 
 ## How pieces relate
 - The CLI depends on `BackupCore` and just forwards user input to `BackupManager`.
@@ -122,7 +132,7 @@ Minimal Azure Blob client + `BackupManager` extension for cloud repo operations.
 
 ## Tips for learners
 ## External disk identification (macOS)
-- Implemented in `Utilities.swift` behind `#if os(macOS)`.
+- Implemented in `Utilities.swift`.
 - Uses URL resource values to obtain the volume URL and volume UUID when available; considers `/Volumes/...` and removable flags as external.
 - Public helpers:
   - `identifyDisk(forPath:) -> DiskIdentity?` returns volumeUUID, mountPath, and `isExternal`.

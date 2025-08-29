@@ -204,24 +204,18 @@ public final class RepositoriesConfigStore {
     /// Default file URL for repositories.json. Tests can override via `overrideFileURL`.
     static func fileURL() -> URL {
         if let o = overrideFileURL { return o }
-        #if os(macOS)
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
-        #else
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-        #endif
         let dir = base.appendingPathComponent("bckp", isDirectory: true)
         return dir.appendingPathComponent("repositories.json")
     }
 
     /// Normalized key for a local repository: standardized absolute path.
     public static func keyForLocal(_ repoURL: URL) -> String {
-        #if os(macOS)
         // If the repo lives on an external volume and we can read a stable volume UUID,
         // incorporate it to make the key robust across path re-mounts or drive letter/name changes.
         if let id = identifyDisk(forPath: repoURL), id.isExternal, let uuid = id.volumeUUID {
             return "ext://volumeUUID=\(uuid)\(repoURL.standardizedFileURL.path)"
         }
-        #endif
         return repoURL.standardizedFileURL.path
     }
 

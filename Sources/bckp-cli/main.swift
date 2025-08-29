@@ -13,7 +13,7 @@ struct Bckp: ParsableCommand {
         commandName: "bckp",
         abstract: "Simple macOS backup tool",
         version: BckpVersion.string,
-    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Repos.self, Logs.self, Drives.self],
+    subcommands: [InitRepo.self, Backup.self, Restore.self, List.self, Prune.self, InitAzure.self, BackupAzure.self, ListAzure.self, RestoreAzure.self, PruneAzure.self, Encryption.self, Repos.self, Logs.self, Drives.self],
         defaultSubcommand: nil
     )
 }
@@ -41,22 +41,43 @@ extension Bckp {
             if let explicit = repo {
                 repoURL = URL(fileURLWithPath: explicit)
             } else if let uuid = externalUUID {
-                #if os(macOS)
                 let disks = listExternalDiskIdentities()
                 guard let match = disks.first(where: { ($0.volumeUUID?.lowercased() ?? "") == uuid.lowercased() }) else {
                     throw ValidationError("External volume with UUID \(uuid) not found or not mounted")
                 }
                 let sub = (externalSubpath?.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) ?? "Backups/bckp"
                 repoURL = match.volumeURL.appendingPathComponent(sub, isDirectory: true)
-                #else
-                throw ValidationError("--external-uuid is supported on macOS only")
-                #endif
             } else {
                 repoURL = URL(fileURLWithPath: cfg.repoPath ?? BackupManager.defaultRepoURL.path)
             }
             try manager.initRepo(at: repoURL)
             RepositoriesConfigStore.shared.recordRepoUsedLocal(repoURL: repoURL)
             print("Initialized repository at \(repoURL.path)")
+        }
+    }
+
+    // MARK: - Encryption utilities
+    struct Encryption: ParsableCommand {
+        static var configuration = CommandConfiguration(
+            abstract: "Encryption utilities",
+            subcommands: [Init.self]
+        )
+
+        struct Init: ParsableCommand {
+            static var configuration = CommandConfiguration(abstract: "Initialize encryption: generate RSA-4096 key with ACL and self-signed certificate")
+
+            @Option(name: .long, help: "Common Name for the certificate (e.g., 'Recipient Name (bckp)')")
+            var cn: String
+
+            @Flag(name: .long, help: "Attempt to sync key and certificate to iCloud Keychain (best-effort)")
+            var icloudSync: Bool = false
+
+            func run() throws {
+                let fp = try EncryptionInitializer.generateSelfSignedRSA(commonName: cn, icloudSync: icloudSync)
+                print("[encryption] generated RSA-4096 key + self-signed cert in login keychain")
+                print("[encryption] CN=\(cn) sha1:\(fp)")
+                if icloudSync { print("[encryption] iCloud sync requested (best-effort)") }
+            }
         }
     }
 
@@ -580,7 +601,7 @@ extension Bckp {
     }
 }
 
-// MARK: - External drives (macOS)
+// MARK: - External drives
 extension Bckp {
     struct Drives: ParsableCommand {
         static var configuration = CommandConfiguration(abstract: "List external/removable drives (macOS). Columns: UUID\tMountPath\tDevice")
@@ -588,8 +609,7 @@ extension Bckp {
         @Flag(name: .long, help: "Output as pretty JSON instead of tab-separated rows")
         var json: Bool = false
 
-        func run() throws {
-            #if os(macOS)
+    func run() throws {
             let disks = listExternalDiskIdentities()
             if json {
                 let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -606,9 +626,6 @@ extension Bckp {
                 let dev = d.deviceBSDName ?? ""
                 print("\(uuid)\t\(d.volumeURL.path)\t\(dev)")
             }
-            #else
-            throw ValidationError("This command is supported on macOS only")
-            #endif
         }
     }
 }
