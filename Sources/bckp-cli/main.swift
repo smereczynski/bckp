@@ -421,7 +421,7 @@ extension Bckp {
             }
             let cfg = RepositoriesConfigStore.shared.config
             if json {
-                let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]; enc.dateEncodingStrategy = .iso8601
+                let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]; enc.dateEncodingStrategy = .iso8601
                 let data = try enc.encode(cfg)
                 if let s = String(data: data, encoding: .utf8) { print(s) }
                 return
@@ -612,7 +612,7 @@ extension Bckp {
     func run() throws {
             let disks = listExternalDiskIdentities()
             if json {
-                let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
                 let data = try enc.encode(disks)
                 if let s = String(data: data, encoding: .utf8) { print(s) }
                 return
